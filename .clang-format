@@ -1,0 +1,63 @@
+# ============================================================
+#  ann-engine 代码风格
+#
+#  用法：
+#    clang-format -i src/*.cpp include/ann/*.h    # 就地格式化
+#    clang-format --dry-run --Werror src/*.cpp    # CI 里只检查不改
+#
+#  编辑器：VS Code 的 C/C++ 扩展、CLion、vim-clang-format 都读这个文件
+# ============================================================
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# ---------- 缩进 ----------
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4          # public: / private: 与 class 对齐
+ContinuationIndentWidth: 4
+NamespaceIndentation: None        # 命名空间内容不额外缩进
+
+# ---------- 行宽 ----------
+ColumnLimit: 100                  # Google 默认 80 太窄，现代 C++ 常用 100
+
+# ---------- 指针 / 引用：靠左贴类型 ----------
+PointerAlignment: Left            # int* p  （不是 int *p）
+ReferenceAlignment: Left          # int& r
+DerivePointerAlignment: false
+
+# ---------- 大括号 ----------
+BreakBeforeBraces: Attach         # 左括号不换行
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Empty
+
+# ---------- 换行控制 ----------
+BinPackArguments: false           # 参数多了就一行一个，便于阅读 diff
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AlignAfterOpenBracket: Align
+PenaltyReturnTypeOnItsOwnLine: 200
+
+# ---------- include 排序 ----------
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup            # 按类别分组：主头 → C 库 → C++ 库 → 三方 → 本项目
+IncludeCategories:
+  - Regex:    '^<.*\.h>'
+    Priority: 1
+  - Regex:    '^<.*>'
+    Priority: 2
+  - Regex:    '^"ann/'
+    Priority: 4
+  - Regex:    '.*'
+    Priority: 3
+
+# ---------- 其他 ----------
+FixNamespaceComments: true        # 自动补 // namespace ann
+ReflowComments: true
+SpacesBeforeTrailingComments: 2
+MaxEmptyLinesToKeep: 1
+SpaceAfterTemplateKeyword: false

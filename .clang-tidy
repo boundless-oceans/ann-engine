@@ -1,0 +1,96 @@
+# ============================================================
+#  ann-engine 静态检查配置（clang-tidy）
+#
+#  与 .clang-format 的分工：
+#    .clang-format   排版（缩进 / 大括号 / 行宽）     —— 不管逻辑
+#    .clang-tidy     静态分析，编译前抓真缺陷          —— 不管排版
+#    ASan/TSan       运行时检查（越界 / 数据竞争）     —— 与上面互补，不可替代
+#
+#  用法：
+#    # clang-tidy 需要 compile_commands.json
+#    cmake -B build-rel -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+#    clang-tidy -p build-rel src/hnsw.cpp
+#
+#    # CI 里只检查、不改，并把指定项当错误
+#    clang-tidy -p build-rel --warnings-as-errors='*' src/*.cpp
+#
+#  设计原则：**只开对本项目有价值的检查。**
+#  把 Checks 写成 '*' 会报出上千条噪音，结果就是第一天把整个文件注释掉。
+#  下面按「本项目会真实踩到」挑选，后续按需增删。
+# ============================================================
+---
+Checks: >
+  -*,
+
+  # ---- 真实缺陷 ----
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+
+  # ---- 性能：本项目重点 ----
+  # 一次无意的 vector 拷贝就能让 QPS 差好几倍，而你会以为是算法慢
+  performance-*,
+
+  # ---- 现代 C++ ----
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-emplace,
+  modernize-make-unique,
+  modernize-use-equals-delete,
+  modernize-use-default-member-init,
+
+  # ---- C++ Core Guidelines（只挑相关的）----
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-special-member-functions,
+  cppcoreguidelines-pro-type-const-cast,
+  cppcoreguidelines-pro-type-reinterpret-cast,
+  cppcoreguidelines-pro-bounds-constant-array-index,
+
+  # ---- 可读性 ----
+  readability-identifier-naming,
+  readability-container-size-empty,
+  readability-avoid-const-params-in-decls,
+  readability-inconsistent-declaration-parameter-name,
+  readability-magic-numbers,
+
+  # ---- 并发：P5 服务化时重要 ----
+  concurrency-*,
+
+  # ---- Clang 静态分析器（路径敏感，最深的一层）----
+  clang-analyzer-*,
+  -clang-analyzer-cplusplus.NewDeleteLeaks
+
+# 这几条建议在 CI 里零容忍（当错误处理）
+WarningsAsErrors: >
+  bugprone-use-after-move,
+  performance-for-range-copy,
+  performance-unnecessary-copy-initialization,
+  modernize-use-override,
+  cppcoreguidelines-init-variables
+
+HeaderFilterRegex: '(include/ann|src|bench|tests|tools)/.*'
+
+CheckOptions:
+  # ---------- 命名规范：与 docs/design/interfaces.md 的约定一致 ----------
+  # 类/结构体/枚举/函数：CamelCase      → HNSWIndex / HNSWParams / L2SqrAVX2
+  # 变量/成员：snake_case，成员带尾下划线 → out_dist / vectors_ / entry_point_
+  # 常量：k 前缀 + CamelCase            → kInvalidIdx / kAlignment
+  # 命名空间：lower_case                 → ann
+  - {key: readability-identifier-naming.ClassCase,             value: CamelCase}
+  - {key: readability-identifier-naming.StructCase,            value: CamelCase}
+  - {key: readability-identifier-naming.EnumCase,              value: CamelCase}
+  - {key: readability-identifier-naming.EnumConstantCase,      value: CamelCase}
+  - {key: readability-identifier-naming.FunctionCase,          value: CamelCase}
+  - {key: readability-identifier-naming.NamespaceCase,         value: lower_case}
+  - {key: readability-identifier-naming.VariableCase,          value: lower_case}
+  - {key: readability-identifier-naming.MemberCase,            value: lower_case}
+  - {key: readability-identifier-naming.MemberSuffix,          value: '_'}
+  - {key: readability-identifier-naming.PrivateMemberCase,     value: lower_case}
+  - {key: readability-identifier-naming.PrivateMemberSuffix,   value: '_'}
+  - {key: readability-identifier-naming.ConstantCase,          value: CamelCase}
+  - {key: readability-identifier-naming.ConstantPrefix,        value: 'k'}
+  - {key: readability-identifier-naming.TemplateParameterCase, value: CamelCase}
+
+  # 小常数与位运算常见值不算「魔法数字」
+  - {key: readability-magic-numbers.IgnoredIntegerValues,      value: '0;1;2;4;8;16;32;64;128;256;512;1024'}
+  - {key: readability-magic-numbers.IgnoredFloatingPointValues, value: '0.0;1.0;0.5'}

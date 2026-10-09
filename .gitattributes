@@ -1,0 +1,62 @@
+# ============================================================
+#  换行符统一策略 —— 本项目在 Windows 侧建库、Ubuntu 侧开发
+#  不加这一段，会出现「整个文件都改动」的假 diff，
+#  更糟的是 shell 脚本带 CRLF 在 Linux 上直接报
+#  bad interpreter: /bin/bash^M
+# ============================================================
+
+# 所有文本文件一律 LF
+* text=auto eol=lf
+
+# ---- 明确声明为文本（并强制 LF）----
+*.md            text eol=lf
+*.txt           text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.json          text eol=lf
+*.toml          text eol=lf
+*.sh            text eol=lf
+*.cmake         text eol=lf
+CMakeLists.txt  text eol=lf
+*.cpp           text eol=lf
+*.cc            text eol=lf
+*.c             text eol=lf
+*.h             text eol=lf
+*.hpp           text eol=lf
+*.cu            text eol=lf
+*.cuh           text eol=lf
+
+# ---- ⚠️ 唯一的例外：Windows 专用脚本必须 CRLF ----
+# cmd.exe 对「只有 LF」的批处理支持有问题 —— 涉及 goto / 标签 / 多行块时
+# 会静默出错。这是「强制 LF」策略里唯一需要开例外的类别。
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# ---- 二进制：禁止任何换行符转换 ----
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+
+# ---- 数据集 ----
+*.fvecs binary
+*.bvecs binary
+*.ivecs binary
+*.hdf5  binary
+*.npy   binary
+
+# ---- 构建产物 ----
+*.o     binary
+*.a     binary
+*.so    binary
+*.dylib binary
+*.dll   binary
+*.exe   binary
+
+# ---- 语言统计：不要让文档/数据污染 GitHub 的语言识别 ----
+docs/*.md      linguist-documentation
+data/**        linguist-vendored
