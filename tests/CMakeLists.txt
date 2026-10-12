@@ -41,8 +41,8 @@ FetchContent_MakeAvailable(googletest)
 # -----------------------------------------------------------------------------
 add_executable(ann_tests
     smoke_test.cpp        # 骨架连通性测试：先证明"构建→测试"这条链路是通的
+    distance_test.cpp     # 距离函数：手算用例 + 度量派发 + 排序约定
     # flat_test.cpp       FlatIndex 的手算用例
-    # distance_test.cpp   距离函数（标量 vs AVX2 结果一致 + 加速比）
     # hnsw_test.cpp       HNSW（含 2 维 10 点图结构验证）
 )
 
