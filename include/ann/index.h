@@ -12,6 +12,10 @@
 //      内存是一等指标，不是事后补的。
 #pragma once
 
+// 与包含卫士并用：前者是快路径（编译器直接跳过重复包含），后者在同文件经不同路径被包含时兜底
+#ifndef ANN_INDEX_H
+#define ANN_INDEX_H
+
 #include <cstddef>
 #include <iosfwd>
 
@@ -64,3 +68,5 @@ public:
 };
 
 }  // namespace ann
+
+#endif  // ANN_INDEX_H
