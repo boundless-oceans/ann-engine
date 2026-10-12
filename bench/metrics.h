@@ -1,6 +1,10 @@
 // 评测指标：Recall@K、延迟分位数、QPS 计时。
 #pragma once
 
+// 与包含卫士并用：前者是快路径（编译器直接跳过重复包含），后者在同文件经不同路径被包含时兜底
+#ifndef ANN_BENCH_METRICS_H
+#define ANN_BENCH_METRICS_H
+
 #include <chrono>
 #include <cstddef>
 #include <string>
@@ -95,3 +99,5 @@ struct BenchRow {
 };
 
 }  // namespace ann::bench
+
+#endif  // ANN_BENCH_METRICS_H

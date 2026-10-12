@@ -27,6 +27,10 @@
 - **语言 C++20**，编译器 **GCC 12+**
   - GCC 11 的 libstdc++ 缺 `<format>` → 用 `fmt` 替代
 - 命名空间 `ann`；头文件 `include/ann/`，实现 `src/`
+- **头文件同时使用 `#pragma once` 与 `#ifndef` 包含卫士**（双重保险）
+  - 卫士宏命名统一为 `ANN_<路径>_H`：`ann/types.h` → `ANN_TYPES_H`，
+    `bench/dataset.h` → `ANN_BENCH_DATASET_H`
+  - `#pragma once` 走快路径，包含卫士在同文件经不同路径被包含时兜底
 - **内部引用一律用 `uint32_t` 下标，绝不用指针**
   - 这一条同时关系到 cache 性能、持久化免重定位、以及未来分片
 - **`Index::Search` 必须是 `const` 且不修改任何成员** —— 这是并发的前提；

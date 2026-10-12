@@ -1,6 +1,10 @@
 // 数据集加载与合成数据生成。
 #pragma once
 
+// 与包含卫士并用：前者是快路径（编译器直接跳过重复包含），后者在同文件经不同路径被包含时兜底
+#ifndef ANN_BENCH_DATASET_H
+#define ANN_BENCH_DATASET_H
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -52,3 +56,5 @@ Dataset MakeSynthetic(size_t n, size_t nq, size_t dim, uint64_t seed);
 Dataset LoadSIFT(const std::string& dir, size_t max_base = 0);
 
 }  // namespace ann::bench
+
+#endif  // ANN_BENCH_DATASET_H

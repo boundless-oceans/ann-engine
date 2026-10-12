@@ -6,6 +6,10 @@
 //      只能与这里的精确结果比对召回率
 #pragma once
 
+// 与包含卫士并用：前者是快路径（编译器直接跳过重复包含），后者在同文件经不同路径被包含时兜底
+#ifndef ANN_FLAT_H
+#define ANN_FLAT_H
+
 #include <vector>
 
 #include "ann/distance.h"
@@ -42,3 +46,5 @@ private:
 };
 
 }  // namespace ann
+
+#endif  // ANN_FLAT_H
