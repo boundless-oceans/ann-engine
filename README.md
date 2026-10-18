@@ -7,7 +7,8 @@
 从零实现的高性能 ANN 检索引擎（C++20）。**手写** HNSW / IVF 索引与 PQ/SQ 量化，
 不依赖 Faiss 等现成库，并与 Faiss 做性能对照。
 
-> **状态：设计阶段** —— 设计文档已定稿，代码尚未开始。
+> **状态：P0 待验证** —— 标量距离、FlatIndex、评测框架与测试已编写，
+> 待手动构建、运行测试并完成 SIFT1M 基线验收。
 
 ---
 
@@ -29,8 +30,7 @@
 
 ## 文档
 
-> ℹ️ 设计文档正在本地持续演进，将在实现基本定型后一并合入本仓库。
-> **当前点击下面的链接会 404，属预期。**
+> 设计文档在本地 `docs/` 下持续演进，目前被 Git 忽略，远程仓库中的链接可能不可用。
 
 | 文档 | 内容 |
 |---|---|
@@ -43,7 +43,7 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| P0 | 工程骨架 + FlatIndex + 评测框架 | ⬜ 未开始 |
+| P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 实现与测试已编写，待构建及基线验收 |
 | P1 | SIMD 距离 + 内存池 | ⬜ 未开始 |
 | P2 | HNSW | ⬜ 未开始 |
 | P3 | IVF + SQ/PQ | ⬜ 未开始 |
@@ -54,7 +54,7 @@
 
 ## 目录结构
 
-> 下面是**规划中**的结构。目录会随实现进度逐步建立。
+> 下面包含现有目录与后续规划，目录会随实现进度逐步建立。
 
 ```
 ann-engine/
@@ -72,10 +72,99 @@ ann-engine/
 ## 开发环境
 
 - **Ubuntu 22.04**
-- GCC 12+（C++20；注意 GCC 11 缺 `<format>`）
+- GCC 11+（C++20；GCC 11/12 缺 `<format>`，需要时用 fmt）
 - CMake 3.22+ · Ninja · ccache
 - GoogleTest · Google Benchmark
 - 构建步骤见 [总设计文档](docs/design/design.md)
+
+## P0 手动验证
+
+以下命令均在仓库根目录执行。首次配置通过 FetchContent 下载 GoogleTest，需联网。
+新增了 12 个 `FlatIndex` 用例，连同已有测试，预计共 27 个用例；是否通过以实际执行为准。
+
+### 1. 配置、构建与单元测试
+
+```bash
+cmake --preset rel
+cmake --build --preset rel -j 4
+./build-rel/bin/ann_tests --gtest_filter='FlatIndex.*'
+ctest --preset rel
+```
+
+预期：FlatIndex 的 12 个测试通过，随后全部测试通过。
+手算用例为 `(0,0)、(1,0)、(10,0)`，查询 `(0.9,0)`，top-2 ID 为 `[1,0]`，
+距离约为 `[0.01,0.81]`。新增用例也验证最近点位于后段时的堆替换，避免只覆盖初始建堆。
+
+### 2. ASan / UBSan 正确性检查
+
+```bash
+cmake --preset san
+cmake --build --preset san -j 4
+ctest --preset san
+```
+
+预期：全部测试通过，ASan / UBSan 无告警。本次未新增并发场景，TSan 并发验证随后续并发功能补齐。
+性能数据只使用 `build-rel`，不使用 Sanitizer 构建。
+
+### 3. 记录测量环境
+
+```bash
+mkdir -p data/p0-results
+lscpu | tee data/p0-results/cpu.txt
+free -h | tee data/p0-results/memory.txt
+uname -a | tee data/p0-results/system.txt
+g++ --version | tee data/p0-results/compiler.txt
+cmake --version | tee data/p0-results/cmake.txt
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor | tee data/p0-results/governor.txt
+```
+
+记录 CPU 型号、物理核数/逻辑线程数、内存、频率 governor、Turbo 状态及是否绑核。
+`lscpu` 是否展示 Turbo 状态取决于平台，未展示时需另行记录；governor 文件不可用时也记录为不可用。
+编译器以 CMake 配置摘要中的实际版本为准；测量时保持电源模式一致并关闭高负载后台任务。
+以下评测均为单线程查询，预热 1 轮、测量 3 轮。
+
+### 4. 合成数据检查评测链路
+
+```bash
+./build-rel/bin/ann_bench --n 100000 --nq 100 --dim 128 --k 10 --metric l2 --warmup 1 --runs 3 | tee data/p0-results/synthetic.txt
+```
+
+预期：输出 Recall、QPS、P50/P95/P99、内存及构建时间。
+合成数据由 FlatIndex 自己生成 ground truth，Recall 为 1.0 只能说明链路通了。
+
+### 5. 完整 SIFT1M 正式验收
+
+按 [数据集说明](data/README.md) 准备三个文件，可先检查其字节数：
+
+```bash
+wc -c data/sift_base.fvecs data/sift_query.fvecs data/sift_groundtruth.ivecs
+```
+
+标准 SIFT1M 的字节数分别为 `516000000`、`5160000`、`4040000`，包含每条记录的维度字段。
+文件大小只是初步检查，还需确认评测输出为 `base: 1000000 x 128`、`queries: 10000`。
+
+```bash
+./build-rel/bin/ann_bench --data data --k 10 --metric l2 --warmup 1 --runs 3 | tee data/p0-results/sift1m.txt
+```
+
+本命令对全量查询执行预热、测量及额外的召回校验，标量 Flat 扫描耗时可能较长。
+`--data` 模式使用文件中的查询条数，`--nq` 不会减少查询数量。
+正式验收不加 `--max-base`：截断 base 后会改用自算答案。
+SIFT 官方答案用于 L2 验收，不用于内积验收。
+
+P0 通过条件：单元测试及 ASan / UBSan 全部通过，完整 SIFT1M 上 `Recall@10 == 1.0`，
+并将实际测得的基线填入下表。当前未执行构建、测试或跑分，不预填性能数字。
+
+| 项目 | 基线记录 |
+|---|---|
+| CPU / 物理核数 / 逻辑线程数 / 内存 | 待测 |
+| governor / Turbo / 绑核 / 电源模式 | 待测 |
+| 系统 / 实际编译器 / 构建配置 | 待测 / 待测 / RelWithDebInfo |
+| 数据 / 度量 / k | SIFT1M（1M × 128，10K queries）/ L2² / 10 |
+| 查询线程数 / warmup / runs | 1 / 1 / 3 |
+| Recall@10 / QPS | 待测 / 待测 |
+| P50 / P95 / P99（ms） | 待测 / 待测 / 待测 |
+| 索引内存（程序输出 MB，按 1024² 换算）/ 构建时间（s） | 待测 / 待测 |
 
 ## 数据集
 
