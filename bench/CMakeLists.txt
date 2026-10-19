@@ -33,3 +33,10 @@ target_link_libraries(ann_bench
     PRIVATE
         ann::core
 )
+
+# 召回差异诊断：仅用于正确性分析，不输出性能指标。
+add_executable(ann_recall_diag
+    recall_diag.cpp
+    dataset.cpp
+)
+target_link_libraries(ann_recall_diag PRIVATE ann::core)
