@@ -9,7 +9,7 @@
 
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
-> **当前处于 P0 阶段。** 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
+> **当前开始 P1，保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
@@ -68,6 +68,15 @@
 - 后续测量补齐本轮频率状态等环境信息，保持可复现的基线记录
 
 **验收标准**：`加载 SIFT1M → FlatIndex → Recall@10 == 1.0`，并记录一个基线 QPS 数字。
+
+**P1 当前工作**：
+
+- 用户已创建 `feat/p1-simd-and-memory` 分支，代理编写代码，用户手动编译、测试与测量
+- 可选 Google Benchmark v1.9.1 距离微基准（`bench/distance_bench.cpp`、目标 `ann_distance_bench`）已由用户编译并完成 10 个用例的运行检查、128 维标量正式测量
+- 开关 `ANN_BUILD_DISTANCE_BENCHMARKS` 默认 OFF；启用、依赖准备及手动命令见 `bench/README.md`
+- 首次标量缓存内基线与环境已记录在 `bench/README.md`（原始 JSON 在 `data/p1-results/scalar-128.json`）；后续接入 AVX2 时需同轮重测 Scalar，不使用跨环境结果直接计算加速比
+- 下一步实现 AVX2 单累加器，再推进四累加器、运行时派发、对齐分配与构建期内存池
+- 严格 Recall 的原有决定继续保持；构建并行不超过 8 个任务
 
 ## 工作方式约定
 
