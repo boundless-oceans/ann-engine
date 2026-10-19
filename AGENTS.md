@@ -10,7 +10,8 @@
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
 > **当前处于 P0 阶段。** 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
-> 但**尚未在 Ubuntu 上编译验证** —— 首次构建很可能有编译错误，属正常。
+> 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
+> 待确认 Sanitizer 测试汇总并完成 SIFT1M 正式验收。
 
 ## 先读这些（按顺序）
 
@@ -52,13 +53,14 @@
 - 评测框架（`bench/`）
 - 距离函数实现 + 单元测试（`src/distance.cpp` · `tests/distance_test.cpp`，9 个用例）
 - `FlatIndex` 实现（`src/flat.cpp`，top-k 用大小为 k 的最大堆，`Search` 零分配）
+- `tests/flat_test.cpp`（12 个用例），已接入 CMake
+- Ubuntu 上 rel 构建及全部 27 个测试通过（用户手动执行）
+- 合成数据基线已记录在 README（环境与参数随结果记录）
 
 **P0 剩余**：
 
-- `tests/flat_test.cpp` —— 用手算的 3 点 2 维例子验证 `Search`
-- **在 Ubuntu 上首次构建并跑通**：
-  `cmake --preset rel` → `cmake --build --preset rel -j` → `./build-rel/bin/ann_tests`
-- 跑 `bench` 拿到基线 QPS
+- 确认 `ctest --preset san` 的最终汇总及 ASan / UBSan 是否无告警（用户已反馈执行完成，未贴汇总）
+- 准备完整 SIFT1M，用官方 ground truth 验证 Recall@10，并记录正式基线与测量环境
 
 **验收标准**：`加载 SIFT1M → FlatIndex → Recall@10 == 1.0`，并记录一个基线 QPS 数字。
 
@@ -120,6 +122,7 @@
 
 ### 其他
 
+- 构建最多使用 8 个并行任务（`-j 8` 或更小）；禁止不带数量的 `-j`，避免内存耗尽
 - 破坏性操作（删除、批量重写）先 dry-run 再执行
 - 涉及性能数字时，**必须同时记录测量环境**：CPU 型号 · 核心数 · 频率调节状态 · 是否 warmup · 单/多线程
 - 注释用**中文**；字符串字面量、控制台输出、构建脚本的输出用**英文**
