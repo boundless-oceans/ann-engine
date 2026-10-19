@@ -11,7 +11,8 @@
 
 > **当前处于 P0 阶段。** 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
-> 待确认 Sanitizer 测试汇总并完成 SIFT1M 正式验收。
+> 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
+> 待排查差异并确认 Sanitizer 测试汇总。
 
 ## 先读这些（按顺序）
 
@@ -56,11 +57,13 @@
 - `tests/flat_test.cpp`（12 个用例），已接入 CMake
 - Ubuntu 上 rel 构建及全部 27 个测试通过（用户手动执行）
 - 合成数据基线已记录在 README（环境与参数随结果记录）
+- 完整 SIFT1M 评测已运行，结果及测量环境信息见 README；原始输出在 `data/p0-results/sift1m.txt`
 
 **P0 剩余**：
 
 - 确认 `ctest --preset san` 的最终汇总及 ASan / UBSan 是否无告警（用户已反馈执行完成，未贴汇总）
-- 准备完整 SIFT1M，用官方 ground truth 验证 Recall@10，并记录正式基线与测量环境
+- 排查完整 SIFT1M 的 Recall@10=0.999300 与验收要求 1.0 的差异；相同距离边界、浮点计算与检索逻辑均待核查，尚未确认原因
+- 后续测量补齐本轮频率状态等环境信息，保持可复现的基线记录
 
 **验收标准**：`加载 SIFT1M → FlatIndex → Recall@10 == 1.0`，并记录一个基线 QPS 数字。
 
