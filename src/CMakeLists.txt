@@ -14,7 +14,8 @@
 
 add_library(ann_core
     # ---- 基础层 ----
-    distance.cpp        # 距离函数（当前只有标量版；AVX2 实现待加）
+    distance.cpp        # 标量距离函数与当前派发
+    distance_avx2.cpp   # AVX2 + FMA 单累加器，函数级指令集隔离
 
     # ---- 索引层 ----
     flat.cpp            # FlatIndex：暴力检索 / ground-truth 生成器
