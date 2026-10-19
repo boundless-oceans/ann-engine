@@ -8,7 +8,8 @@
 不依赖 Faiss 等现成库，并与 Faiss 做性能对照。
 
 > **状态：P0 验证中** —— Ubuntu 上 rel 构建的 27 个测试已通过，合成数据评测已跑通；
-> 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；待排查差异并确认 Sanitizer 测试汇总。
+> san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；全量 SIFT1M 严格 Recall@10=0.999300，
+> 70 条差异已确认为同距离点的不同选择。保留严格指标与原验收标准，尚未达到 1.0。
 
 ---
 
@@ -43,7 +44,7 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel 测试通过；全量 SIFT1M Recall=0.999300，差异待排查 |
+| P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
 | P1 | SIMD 距离 + 内存池 | ⬜ 未开始 |
 | P2 | HNSW | ⬜ 未开始 |
 | P3 | IVF + SQ/PQ | ⬜ 未开始 |
@@ -107,6 +108,9 @@ ctest --preset san
 
 预期：全部测试通过，ASan / UBSan 无告警。本次未新增并发场景，TSan 并发验证随后续并发功能补齐。
 性能数据只使用 `build-rel`，不使用 Sanitizer 构建。
+
+已核验用户于 2026-10-18 执行的完整 `build-san/Testing/Temporary/LastTest.log`：
+27 条测试记录全部通过，未发现 ASan / UBSan 告警；对应 CMake 缓存确认 Debug、ASan=ON、UBSan=ON。
 
 ### 3. 记录测量环境
 
@@ -187,10 +191,48 @@ P0 通过条件：单元测试及 ASan / UBSan 全部通过，完整 SIFT1M 上 
 | 平均 / P50 / P95 / P99 / 最大延迟（ms） | 56.1607 / 56.3556 / 58.5170 / 67.3618 / 93.0090 |
 | 索引内存 / 构建时间（s） | 488.3 MiB / 0.198 |
 
-待排查：逐条对照官方 top-10，定位缺失与额外返回的 ID，核对它们的实际距离。
-相同距离下的边界选择、浮点计算及检索逻辑均是待核查项，目前没有确认原因。
-保持 `Recall@10 == 1.0` 的原验收标准，不把本次接近 1.0 的结果记为验收通过。
-Sanitizer 已由用户反馈执行完成，但尚未提供最终测试汇总及无告警确认。
+已通过下一节的诊断工具定位：10000 条查询中有 70 条各缺少一个官方 top-10 ID，
+由另一个相同距离的点替代。全部 70 条差异查询的排序后 double 距离序列与官方答案、独立参考完全相等，
+float 返回距离也与 double 重算结果一致。本次差异没有发现更远点替代更近点的证据。
+例如官方 ID 266710 与返回 ID 202432 的 L2² 均为 48069。
+
+用户决定保留严格按 ID 匹配的 Recall，不增加替代指标，不为追平官方平局选择修改检索逻辑。
+`Recall@10 == 1.0` 的原验收标准保持不变，本次未达成；后续结果继续如实报告严格 Recall。
+Sanitizer 验证已通过，召回差异分析已完成，原验收未达成事项继续保留。
+
+### 6. 诊断 SIFT1M 召回差异
+
+新增 `ann_recall_diag`，固定检查 L2 top-10，不截断 base。
+工具已由用户手动编译并完成全量运行；复现命令如下：
+
+```bash
+cmake --build --preset rel --target ann_recall_diag -j 8
+mkdir -p data/p0-results
+./build-rel/bin/ann_recall_diag data > data/p0-results/recall-diag.txt
+```
+
+现有 Ninja 构建会在检测到 CMakeLists.txt 变化后重新生成；依赖源码位置沿用构建缓存。
+GoogleTest 已改为使用项目内 `build-deps/googletest-1.15.2`，避免 `/tmp` 被清理导致重新配置失败。
+若旧缓存仍指向 `/tmp`，在源码已到位的前提下执行
+`cmake --preset rel -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-deps/googletest-1.15.2"`。
+进度每 100 条查询输出到终端，详细结果写入文件。
+只做一轮查询，不预热或跑性能轮次；对每个 ID 不一致的查询，额外独立扫描全部 base，
+用 double 距离和标准库部分选择生成参考 top-10。
+输出包括缺失/额外 ID、float 返回距离、double 重算距离、官方与参考结果。
+
+```bash
+tail -n 10 data/p0-results/recall-diag.txt
+```
+
+`strict_recall` 仍严格按 ID 匹配；`both_distance_equivalent_to_reference` 表示双方距离序列
+都与参考结果匹配的查询数（容差 `1e-9 * max(1, |a|, |b|)`），仅用于分析。
+参考结果按距离再按 ID 排序，并不代表官方答案采用相同的平局规则。
+出现 `unresolved_queries` 时应查看明细；诊断工具正常结束不等于原 Recall 验收通过。
+
+本轮汇总：`strict_recall=0.999300000`、`missing_ids=70`、`mismatched_queries=70`、
+`both_distance_equivalent_to_reference=70`、`unresolved_queries=0`。
+原始明细在 `data/p0-results/recall-diag.txt`（本地文件，不入库）；另已逐条核对输出，
+70 条差异查询的距离一致性均为完全相等，并非仅依赖诊断分类容差。
 
 ## 数据集
 

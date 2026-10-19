@@ -12,7 +12,8 @@
 > **当前处于 P0 阶段。** 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
-> 待排查差异并确认 Sanitizer 测试汇总。
+> san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
+> 用户决定保留严格 Recall，不增加替代指标、不为追平官方平局选择修改检索逻辑；原验收标准仍未达成。
 
 ## 先读这些（按顺序）
 
@@ -56,13 +57,14 @@
 - `FlatIndex` 实现（`src/flat.cpp`，top-k 用大小为 k 的最大堆，`Search` 零分配）
 - `tests/flat_test.cpp`（12 个用例），已接入 CMake
 - Ubuntu 上 rel 构建及全部 27 个测试通过（用户手动执行）
+- Debug + ASan / UBSan 构建的全部 27 个测试通过，已核对完整 LastTest.log 和 CMakeCache.txt，日志无 Sanitizer 告警
 - 合成数据基线已记录在 README（环境与参数随结果记录）
 - 完整 SIFT1M 评测已运行，结果及测量环境信息见 README；原始输出在 `data/p0-results/sift1m.txt`
+- 召回差异诊断工具 `bench/recall_diag.cpp` 已由用户编译并完成全量运行；70 条差异均经独立 double 参考复核，距离序列完全一致，未解释差异为 0
 
 **P0 剩余**：
 
-- 确认 `ctest --preset san` 的最终汇总及 ASan / UBSan 是否无告警（用户已反馈执行完成，未贴汇总）
-- 排查完整 SIFT1M 的 Recall@10=0.999300 与验收要求 1.0 的差异；相同距离边界、浮点计算与检索逻辑均待核查，尚未确认原因
+- 原严格 Recall@10=1.0 验收未达成（实测 0.999300），原因已解释并保留记录，不再当作未知原因重复排查
 - 后续测量补齐本轮频率状态等环境信息，保持可复现的基线记录
 
 **验收标准**：`加载 SIFT1M → FlatIndex → Recall@10 == 1.0`，并记录一个基线 QPS 数字。
