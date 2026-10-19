@@ -19,12 +19,12 @@
 #  常用命令（等价于 CMakePresets.json 里的预设）
 #
 #    cmake --preset rel                 # 配置：RelWithDebInfo
-#    cmake --build --preset rel         # 构建
+#    cmake --build --preset rel         # 构建，预设最多 8 个并行任务
 #    ctest --preset rel                 # 跑测试
 #
 #    # 不依赖 presets 的等价手写形式：
 #    cmake -B build-rel -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-#    cmake --build build-rel -j
+#    cmake --build build-rel -j 8
 #    ctest --test-dir build-rel --output-on-failure
 #  ---------------------------------------------------------------------------
 # =============================================================================

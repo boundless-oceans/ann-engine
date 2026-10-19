@@ -72,11 +72,11 @@
   ],
 
   "buildPresets": [
-    { "name": "rel",  "configurePreset": "rel",  "jobs": 0 },
-    { "name": "dbg",  "configurePreset": "dbg",  "jobs": 0 },
-    { "name": "san",  "configurePreset": "san",  "jobs": 0 },
-    { "name": "tsan", "configurePreset": "tsan", "jobs": 0 },
-    { "name": "ci",   "configurePreset": "ci",   "jobs": 0 }
+    { "name": "rel",  "configurePreset": "rel",  "jobs": 8 },
+    { "name": "dbg",  "configurePreset": "dbg",  "jobs": 8 },
+    { "name": "san",  "configurePreset": "san",  "jobs": 8 },
+    { "name": "tsan", "configurePreset": "tsan", "jobs": 8 },
+    { "name": "ci",   "configurePreset": "ci",   "jobs": 8 }
   ],
 
   "testPresets": [
