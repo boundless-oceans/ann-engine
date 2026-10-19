@@ -33,6 +33,12 @@ dist_t InnerProductScalar(const float* a, const float* b, size_t dim);
 dist_t L2SqrAVX2(const float* a, const float* b, size_t dim);
 dist_t InnerProductAVX2(const float* a, const float* b, size_t dim);
 
+// ---- AVX2 + FMA 四累加器实现 ----
+// 与单累加器契约一致；每轮处理 32 维，用四条独立依赖链隐藏 FMA 延迟。
+// 保留独立入口供同轮对比，暂不替换 SelectDistFn 中的标量实现。
+dist_t L2SqrAVX2Four(const float* a, const float* b, size_t dim);
+dist_t InnerProductAVX2Four(const float* a, const float* b, size_t dim);
+
 // 按度量选择距离函数。
 // 返回的函数已按上述排序约定归一化：内积返回负值。
 // Metric::Cosine 尚未实现，当前会回退到内积。

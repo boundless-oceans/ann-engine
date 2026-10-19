@@ -24,7 +24,11 @@ protected:
     }
 };
 
-void CheckAgainstDouble(const float* a, const float* b, size_t dim) {
+void CheckAgainstDouble(const float* a,
+                        const float* b,
+                        size_t dim,
+                        ann::DistFn l2_fn = ann::L2SqrAVX2,
+                        ann::DistFn ip_fn = ann::InnerProductAVX2) {
     double l2 = 0.0;
     double ip = 0.0;
     double abs_products = 0.0;
@@ -38,8 +42,8 @@ void CheckAgainstDouble(const float* a, const float* b, size_t dim) {
     // 内积可能相消到接近零，因此按绝对乘积和设误差尺度，不只看最终结果。
     const double l2_tolerance = 2e-5 * std::max(1.0, l2);
     const double ip_tolerance = 2e-5 * std::max(1.0, abs_products);
-    EXPECT_NEAR(static_cast<double>(ann::L2SqrAVX2(a, b, dim)), l2, l2_tolerance);
-    EXPECT_NEAR(static_cast<double>(ann::InnerProductAVX2(a, b, dim)), -ip, ip_tolerance);
+    EXPECT_NEAR(static_cast<double>(l2_fn(a, b, dim)), l2, l2_tolerance);
+    EXPECT_NEAR(static_cast<double>(ip_fn(a, b, dim)), -ip, ip_tolerance);
     EXPECT_NEAR(static_cast<double>(ann::L2SqrScalar(a, b, dim)), l2, l2_tolerance);
     EXPECT_NEAR(static_cast<double>(ann::InnerProductScalar(a, b, dim)), -ip, ip_tolerance);
 }
@@ -113,6 +117,87 @@ TEST_F(DistanceAVX2, InnerProductCancellation) {
     const float b[9] = {10000, -10000, 10000, -10000, 10000, -10000, 10000, -10000, 0.25f};
     CheckAgainstDouble(a, b, 9);
     EXPECT_NEAR(ann::InnerProductAVX2(a, b, 9), -0.25f, 1e-5f);
+}
+
+// 复用同样的 CPU 特性检查，四累加器结果仍与独立 double 参考比较。
+class DistanceAVX2Four : public DistanceAVX2 {};
+
+TEST_F(DistanceAVX2Four, HandComputedBlocks) {
+    std::array<float, 32> zero{};
+    std::array<float, 32> blocks{};
+    std::array<float, 32> ones{};
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        blocks[i] = static_cast<float>(i / 8 + 1);
+        ones[i] = 1.0f;
+    }
+    // 四个分块各有 8 个元素，L2 = 8*(1+4+9+16)，负内积 = -8*(1+2+3+4)。
+    EXPECT_NEAR(ann::L2SqrAVX2Four(zero.data(), blocks.data(), 32), 240.0f, 1e-5f);
+    EXPECT_NEAR(ann::InnerProductAVX2Four(ones.data(), blocks.data(), 32), -80.0f, 1e-5f);
+}
+
+TEST_F(DistanceAVX2Four, ZeroDimensionAndIdenticalVectors) {
+    EXPECT_FLOAT_EQ(ann::L2SqrAVX2Four(nullptr, nullptr, 0), 0.0f);
+    EXPECT_FLOAT_EQ(ann::InnerProductAVX2Four(nullptr, nullptr, 0), 0.0f);
+    const std::vector<float> a(129, 3.25f);
+    EXPECT_FLOAT_EQ(ann::L2SqrAVX2Four(a.data(), a.data(), a.size()), 0.0f);
+}
+
+TEST_F(DistanceAVX2Four, BlockBoundariesAndRemainders) {
+    for (const size_t dim :
+         {1u,  7u,  8u,   9u,   15u,  16u,  17u,  23u,  24u,  25u,  31u, 32u, 33u,
+          39u, 40u, 41u,  47u,  48u,  49u,  55u,  56u,  57u,  63u,  64u, 65u, 95u,
+          96u, 97u, 127u, 128u, 129u, 159u, 160u, 161u, 959u, 960u, 961u}) {
+        SCOPED_TRACE(dim);
+        // 仅分配实际长度以便 ASan 检测过度加载，最后一维使用不同数值检查遗漏。
+        const std::vector<float> a(dim, 1.0f);
+        std::vector<float> b(dim, 2.0f);
+        b.back() = 3.0f;
+        CheckAgainstDouble(a.data(), b.data(), dim, ann::L2SqrAVX2Four, ann::InnerProductAVX2Four);
+    }
+}
+
+TEST_F(DistanceAVX2Four, UnalignedInputs) {
+    alignas(32) std::array<float, 137> a{};
+    alignas(32) std::array<float, 137> b{};
+    for (size_t i = 0; i < a.size(); ++i) {
+        a[i] = static_cast<float>(i) / 7.0f;
+        b[i] = -static_cast<float>(i) / 11.0f;
+    }
+    for (size_t offset = 1; offset < 8; ++offset) {
+        SCOPED_TRACE(offset);
+        CheckAgainstDouble(a.data() + offset,
+                           b.data() + offset,
+                           129,
+                           ann::L2SqrAVX2Four,
+                           ann::InnerProductAVX2Four);
+    }
+}
+
+TEST_F(DistanceAVX2Four, MixedSignsAgainstIndependentReference) {
+    std::mt19937 rng(42);
+    for (const size_t dim : {31u, 32u, 33u, 63u, 64u, 65u, 127u, 128u, 129u, 960u, 961u}) {
+        SCOPED_TRACE(dim);
+        std::vector<float> a(dim);
+        std::vector<float> b(dim);
+        for (size_t i = 0; i < dim; ++i) {
+            a[i] = static_cast<float>(static_cast<int>(rng() % 2001) - 1000) / 1000.0f;
+            b[i] = static_cast<float>(static_cast<int>(rng() % 2001) - 1000) / 1000.0f;
+        }
+        CheckAgainstDouble(a.data(), b.data(), dim, ann::L2SqrAVX2Four, ann::InnerProductAVX2Four);
+    }
+}
+
+TEST_F(DistanceAVX2Four, InnerProductCancellation) {
+    std::array<float, 33> a{};
+    std::array<float, 33> b{};
+    for (size_t i = 0; i < 32; ++i) {
+        a[i] = 10000.0f;
+        b[i] = i % 2 == 0 ? 10000.0f : -10000.0f;
+    }
+    a[32] = 1.0f;
+    b[32] = 0.25f;
+    CheckAgainstDouble(a.data(), b.data(), a.size(), ann::L2SqrAVX2Four, ann::InnerProductAVX2Four);
+    EXPECT_NEAR(ann::InnerProductAVX2Four(a.data(), b.data(), a.size()), -0.25f, 1e-5f);
 }
 
 }  // namespace
