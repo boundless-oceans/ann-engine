@@ -4,9 +4,11 @@
 
 `ann_distance_bench` 使用 Google Benchmark v1.9.1，直接调用现有的
 `L2SqrScalar` 与 `InnerProductScalar`（返回负内积），以及新增的 AVX2 + FMA 单累加器实现。
+四累加器已在 `feat/p1-avx2-four-accumulators` 子分支完成 rel/san 测试验证与 128 维三版本同轮测量。
 每种函数覆盖 16、127、128、129、960 维，其中 127/129 为后续 SIMD 尾部处理提供对照。
 用户已手动完成编译、10 个用例的运行检查及 128 维标量正式测量；基线结果见下文。
 AVX2 单累加器已由用户编译、完成 rel/san 共 35 个测试与 128 维正式测量；当前注册 20 个微基准。
+当前子分支新增 6 个四累加器测试和 10 个微基准条目，总计 41 个测试、注册 30 个微基准。
 以下命令保留用于复现。
 
 微基准反复计算同一对向量，输入起点按 64 字节对齐，数据可以驻留缓存。
@@ -42,7 +44,7 @@ ctest --preset rel
 ./build-rel/bin/ann_distance_bench --benchmark_dry_run
 ```
 
-预期：共 35 个测试通过，列表列出 20 个微基准，dry run 每项仅执行一次。
+当前子分支预期：共 41 个测试通过，列表列出 30 个微基准，dry run 每项仅执行一次。
 AVX2 测试及微基准在不支持 AVX2/FMA 的 CPU 上跳过，不能把跳过视为已验证 SIMD。
 dry run 用于检查运行链路，不用于记录性能。无需重跑 SIFT1M。
 
@@ -165,7 +167,8 @@ cmake --build --preset rel --target ann_tests ann_distance_bench -j 8
 ctest --preset rel
 ```
 
-预期新增 8 个测试通过，合计 35 个。然后配置 san 并检查尾部加载与其他未定义行为：
+单累加器交付时新增 8 个测试、合计 35 个；当前子分支四累加器验证见第 7 节。
+然后配置 san 并检查尾部加载与其他未定义行为：
 
 ```bash
 cmake --preset san -DANN_BUILD_DISTANCE_BENCHMARKS=OFF -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-deps/googletest-1.15.2"
@@ -215,7 +218,7 @@ cat /sys/devices/system/cpu/intel_pstate/no_turbo > data/p1-results/avx2single-n
 未绑核和允许 Turbo 仍可能影响不同函数之间的运行条件；CV 较小不等于排除了系统偏差。
 超过 8× 不代表硬件向量宽度变大或已达到计算/带宽上限，完整归因需要后续反汇编及 perf 分析。
 输出的约 140–161 GiB/s 是逻辑读取吞吐，不是 DRAM 实测带宽，也不能将加速比直接套到 Flat QPS。
-目前尚未接入索引运行时派发，下一步保留单累加器对照并实现四累加器。
+目前尚未接入索引运行时派发，四累加器保留单累加器对照，最新三版本结果见第 7 节。
 
 | 新增追问 | 答案要点 |
 |---|---|
@@ -223,6 +226,105 @@ cat /sys/devices/system/cpu/intel_pstate/no_turbo > data/p1-results/avx2single-n
 | 为什么不加全局 -mavx2？ | 避免编译器在标量或其他路径引入高阶指令，给后续安全派发保留基础。 |
 | 八维向量累加后如何得到标量？ | 合并高低两个 128 位半部，再水平求和，最后加尾部贡献。 |
 | 为什么单累加器之后还要四累加器？ | SIMD 增加每条指令处理的数据量，多累加器进一步减少依赖链对吞吐的限制。 |
+
+## 7. 四累加器子分支与手动验证
+
+分支 `feat/p1-avx2-four-accumulators` 从 P1 集成分支创建，验证通过后由用户合回。
+新增入口 `L2SqrAVX2Four` 和 `InnerProductAVX2Four`；现有单累加器入口保留。
+两种版本共享 CPU/内存前提：x86 GCC/Clang 上直接调用要求 AVX2 和 FMA，允许非 32 字节对齐输入，
+支持任意维度，dim=0 不读取输入。其他平台回退标量，测试与微基准跳过其 SIMD 用例。
+当前 `SelectDistFn` 仍返回标量；本次没有修改索引查询路径。
+
+四累加器主循环每轮处理 32 维，分别累加偏移 0、8、16、24 的八维块。
+循环结束按 `(acc0 + acc1) + (acc2 + acc3)` 合并，继续处理完整的八维块，
+最后对最多 7 维执行标量尾循环。这样减少主循环中每条 FMA 链的串行依赖，
+代价是更多寄存器、合并指令和代码体积；短向量不保证更快，也不承诺相对单累加器达到固定倍数。
+
+新增 6 个测试，检查四块手算、零维/相同向量、32 维及 8 维边界、非对齐、正负混合和内积相消；
+一般数值测试复用原 double 参考与误差尺度，精确长度分配配合 ASan 检查尾部过读。
+一般输入容差仍为 `2e-5 * max(1, scale)`；L2 的 scale 为参考距离，内积的 scale 为绝对乘积和。
+不同版本的累加顺序不同，结果不要求逐 bit 相等。
+用户已手动编译并完成 rel/san 验证；已核对完整日志，两套均为 41 个测试通过、0 个失败，
+san 缓存确认为 Debug + ASan/UBSan，日志无相关告警。128 维性能测量也已完成，见本节末尾。
+
+### rel / san 检查
+
+依赖与 rel 配置沿用第 2 节，不需要重新下载依赖：
+
+```bash
+cmake --build --preset rel --target ann_tests ann_distance_bench -j 8
+./build-rel/bin/ann_tests --gtest_filter='DistanceAVX2Four.*'
+ctest --preset rel
+cmake --preset san -DANN_BUILD_DISTANCE_BENCHMARKS=OFF -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-deps/googletest-1.15.2"
+cmake --build --preset san --target ann_tests -j 8
+ctest --preset san
+```
+
+支持 AVX2/FMA 的开发机上，预期四累加器 6 个测试通过，rel/san 均总计 41 个通过且无告警。
+任一步失败先停止，不继续测性能。
+
+### 同轮三版本对比
+
+先检查 30 个微基准能运行：
+
+```bash
+./build-rel/bin/ann_distance_bench --benchmark_list_tests=true
+./build-rel/bin/ann_distance_bench --benchmark_dry_run
+```
+
+然后记录环境并正式测量，不覆盖之前单累加器原始结果：
+
+```bash
+mkdir -p data/p1-results
+date -Iseconds > data/p1-results/avx2four-date.txt
+lscpu > data/p1-results/avx2four-cpu.txt
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor > data/p1-results/avx2four-governor.txt
+cat /sys/devices/system/cpu/intel_pstate/no_turbo > data/p1-results/avx2four-no-turbo.txt
+./build-rel/bin/ann_distance_bench --benchmark_filter='^Distance/(L2|IP)/(Scalar|AVX2Single|AVX2Four)/128$' --benchmark_min_warmup_time=0.2 --benchmark_min_time=0.5s --benchmark_repetitions=5 --benchmark_out=data/p1-results/avx2four-128.json --benchmark_out_format=json
+```
+
+本轮沿用单线程、不显式绑核，最短预热 0.2 秒、每次最短测量 0.5 秒、重复 5 次。
+补充记录接电、电源模式，并保持与对照一致；CPU 型号、核心数及频率状态随原始结果保存。
+使用同轮 CPU mean 计算 `Scalar/Four` 与 `Single/Four`，同时看 CV。
+若 128 维下收益不明显，再用同样的三版本过滤规则测 960 维，输出新文件；
+不要预设“必然加速”，也不能仅凭缓存内微基准判断已达到 DRAM 带宽上限。
+
+| 追问 | 答案要点 |
+|---|---|
+| 四累加器和四线程有何区别？ | 同一线程用四个向量寄存器累加，让 CPU 有机会并行执行独立指令，不创建线程。 |
+| 为什么最终不是四个标量分别求和？ | 先合并向量，再做一次水平归约，避免重复水平求和。 |
+| 不足 32 维怎么办？ | 继续处理完整八维块，最后处理不足八维的标量尾部，不能丢掉剩余维度或越界加载。 |
+| 为什么可能没有预期收益？ | 短向量中合并和调用开销占比高，也可能受加载吞吐、编译器调度或核心/频率变化影响，需测量和剖析。 |
+
+### 四累加器实测结果
+
+2026-10-19 23:57（Asia/Shanghai），原始文件 `data/p1-results/avx2four-128.json`。
+
+| 环境项 | 本轮记录 |
+|---|---|
+| CPU / 物理核数 / 逻辑线程数 | Intel Core i7-14650HX / 16 / 24（沿用同机信息，JSON 报告 24 个逻辑 CPU） |
+| 系统 / 编译器 / 构建 | Ubuntu 22.04.5 LTS / GCC 11.4.0 / RelWithDebInfo（沿用同一构建环境） |
+| governor / Turbo | 本轮未保存独立快照；前次 cpu0 powersave、no_turbo=0，不能据此确认本轮状态 |
+| 频率调节 | 本轮 Benchmark 警告 CPU scaling enabled；实际持续频率未记录 |
+| 线程数 / 绑核 / 输入 | 1 / 未显式绑核 / 128 维、对齐、热缓存 |
+| 最短预热 / 每次最短测量 / 重复 | 0.2 秒 / 0.5 秒 / 5 次 |
+| 接电 / 电源模式 / 内存容量 | 未记录 / 未记录 / 未记录 |
+
+| CPU mean（ns） | Scalar | AVX2Single | AVX2Four | Scalar/Four | Single/Four |
+|---|---:|---:|---:|---:|---:|
+| L2² / 128 | 63.6557 | 6.9838 | 5.1599 | 12.34× | 1.35× |
+| 负内积 / 128 | 58.1224 | 5.8313 | 5.2830 | 11.00× | 1.10× |
+
+| CPU CV | Scalar | AVX2Single | AVX2Four |
+|---|---:|---:|---:|
+| L2² / 128 | 1.4954% | 0.1654% | 0.0907% |
+| 负内积 / 128 | 0.1744% | 0.1038% | 0.0225% |
+
+按同轮 CPU 均值，四累加器相对单累加器的耗时减少约 26.12%（L2²）、9.40%（负内积）。
+这是实测现象，不能单凭该结果确认依赖链是唯一原因；调用开销、加载吞吐、编译器调度与频率/核心差异
+都可能影响两种函数的收益，后续仍需反汇编与 perf 分析。尚未将四累加器派发给 FlatIndex。
+本轮未保存 `avx2four-governor.txt` 和 `avx2four-no-turbo.txt`，表中据实记录缺项，不用事后采样替代过去状态。
+后续可复现比较须在测量前保存完整环境；P1 的派发、内存与 perf 工作尚未完成。
 
 ## 关键取舍与面试讲点
 
