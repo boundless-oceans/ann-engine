@@ -12,8 +12,7 @@
 #    这些都是"跑一批查询、统计结果"的逻辑，自己用 steady_clock 计时更直接，
 #    也少一个第三方依赖。
 #
-#    结论：当前不引入 Google Benchmark；
-#          将来做距离函数的微基准时再按需加入。
+#    结论：端到端程序保持独立；P1 的距离微基准按需启用 Google Benchmark。
 # =============================================================================
 
 add_executable(ann_bench
@@ -40,3 +39,21 @@ add_executable(ann_recall_diag
     dataset.cpp
 )
 target_link_libraries(ann_recall_diag PRIVATE ann::core)
+
+if(ANN_BUILD_DISTANCE_BENCHMARKS)
+    include(FetchContent)
+
+    # 固定依赖版本；关闭第三方自身测试，避免再拉一份 GoogleTest。
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(googlebenchmark
+        GIT_REPOSITORY https://github.com/google/benchmark.git
+        GIT_TAG v1.9.1
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(googlebenchmark)
+
+    add_executable(ann_distance_bench distance_bench.cpp)
+    target_link_libraries(ann_distance_bench PRIVATE ann::core benchmark::benchmark_main)
+endif()
