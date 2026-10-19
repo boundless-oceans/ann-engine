@@ -1,0 +1,102 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+
+    {
+      "name": "rel",
+      "inherits": "base",
+      "displayName": "rel  - RelWithDebInfo (the only valid configuration for performance measurement)",
+      "description": "Optimized, with debug symbols. Every performance number quoted in documentation must originate from this configuration.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+
+    {
+      "name": "dbg",
+      "inherits": "base",
+      "displayName": "dbg  - Debug (no sanitizers; interactive debugging)",
+      "description": "Keeps assert() active for stepping through code. Not for performance measurement.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+
+    {
+      "name": "san",
+      "inherits": "base",
+      "displayName": "san  - Debug + ASan + UBSan (correctness checking)",
+      "description": "Detects out-of-bounds access, use-after-free, leaks and undefined behavior. Several times slower than rel; must not be used for timing.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ANN_ENABLE_ASAN": "ON",
+        "ANN_ENABLE_UBSAN": "ON"
+      }
+    },
+
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "displayName": "tsan - Debug + TSan (data race detection)",
+      "description": "Required once concurrent search is implemented. TSan is unavailable on MinGW/Windows; use it on Linux and in CI only.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ANN_ENABLE_TSAN": "ON"
+      }
+    },
+
+    {
+      "name": "ci",
+      "inherits": "rel",
+      "displayName": "ci   - RelWithDebInfo + warnings as errors",
+      "description": "CI only. Any compiler warning fails the pipeline.",
+      "cacheVariables": {
+        "ANN_WARNINGS_AS_ERRORS": "ON"
+      }
+    }
+  ],
+
+  "buildPresets": [
+    { "name": "rel",  "configurePreset": "rel",  "jobs": 8 },
+    { "name": "dbg",  "configurePreset": "dbg",  "jobs": 8 },
+    { "name": "san",  "configurePreset": "san",  "jobs": 8 },
+    { "name": "tsan", "configurePreset": "tsan", "jobs": 8 },
+    { "name": "ci",   "configurePreset": "ci",   "jobs": 8 }
+  ],
+
+  "testPresets": [
+    {
+      "name": "rel",
+      "configurePreset": "rel",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "san",
+      "configurePreset": "san",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    }
+  ]
+}
