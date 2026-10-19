@@ -3,9 +3,10 @@
 ## 当前交付与边界
 
 `ann_distance_bench` 使用 Google Benchmark v1.9.1，直接调用现有的
-`L2SqrScalar` 与 `InnerProductScalar`（返回负内积），不修改索引或距离接口。
+`L2SqrScalar` 与 `InnerProductScalar`（返回负内积），以及新增的 AVX2 + FMA 单累加器实现。
 每种函数覆盖 16、127、128、129、960 维，其中 127/129 为后续 SIMD 尾部处理提供对照。
 用户已手动完成编译、10 个用例的运行检查及 128 维标量正式测量；基线结果见下文。
+AVX2 单累加器已由用户编译、完成 rel/san 共 35 个测试与 128 维正式测量；当前注册 20 个微基准。
 以下命令保留用于复现。
 
 微基准反复计算同一对向量，输入起点按 64 字节对齐，数据可以驻留缓存。
@@ -41,7 +42,8 @@ ctest --preset rel
 ./build-rel/bin/ann_distance_bench --benchmark_dry_run
 ```
 
-预期：原有 27 个测试通过，列表列出 10 个微基准，dry run 每项仅执行一次。
+预期：共 35 个测试通过，列表列出 20 个微基准，dry run 每项仅执行一次。
+AVX2 测试及微基准在不支持 AVX2/FMA 的 CPU 上跳过，不能把跳过视为已验证 SIMD。
 dry run 用于检查运行链路，不用于记录性能。无需重跑 SIFT1M。
 
 微基准开关默认为 OFF，不影响未启用它的构建目录。
@@ -136,6 +138,91 @@ for row in rows:
         print(f'{row["name"]}: {row["cpu_time"]:.4f} {row["time_unit"]}')
 PY
 ```
+
+## 6. AVX2 单累加器实现与手动验证
+
+核心在 `src/distance_avx2.cpp`。每次加载 8 个 float，L2² 做减法后 FMA，负内积做 FMA，
+循环结束合并 8 个 lane，再处理不足 8 维的尾部。`loadu` 接受非 32 字节对齐的 float 输入，
+不要求 dim 是 8 的倍数；dim=0 不访问输入。
+
+函数通过 `target("avx2,fma")` 局部启用指令集，不给整个库添加全局 ISA 选项。
+x86 GCC/Clang 上调用者必须先确认 AVX2 和 FMA 均可用，当前测试和微基准在测量外检查；
+其他编译器/平台提供标量回退，微基准会跳过这些平台的 AVX2 条目。
+函数属性的作用见 [GCC 文档](https://gcc.gnu.org/onlinedocs/gcc-12.3.0/gcc/x86-Function-Attributes.html)。
+运行时派发尚未接入，`SelectDistFn` 仍返回原标量函数，所以这一轮不需要重跑全量 SIFT1M。
+
+设计取舍：单累加器易于验证，保留为四累加器的对照，但存在循环携带的 FMA 依赖链。
+先用 loadu 支持通用输入；后续对齐容器和对齐加载的收益应另行测量。
+FMA 舍入次数及水平归约顺序与标量不同，不承诺逐 bit 相等。
+独立 double 参考测试对 L2 按结果尺度、对内积按绝对乘积和设置容差，避免相消到零时使用不合理的相对误差。
+一般输入的容差为 `2e-5 * max(1, scale)`，同时保留精确手算与边界测试。
+
+先构建、运行 rel 测试：
+
+```bash
+cmake --build --preset rel --target ann_tests ann_distance_bench -j 8
+./build-rel/bin/ann_tests --gtest_filter='DistanceAVX2.*'
+ctest --preset rel
+```
+
+预期新增 8 个测试通过，合计 35 个。然后配置 san 并检查尾部加载与其他未定义行为：
+
+```bash
+cmake --preset san -DANN_BUILD_DISTANCE_BENCHMARKS=OFF -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-deps/googletest-1.15.2"
+cmake --build --preset san --target ann_tests -j 8
+ctest --preset san
+```
+
+通过后再检查并正式测量，使用 rel 二进制：
+
+```bash
+./build-rel/bin/ann_distance_bench --benchmark_dry_run
+mkdir -p data/p1-results
+lscpu > data/p1-results/avx2single-cpu.txt
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor > data/p1-results/avx2single-governor.txt
+cat /sys/devices/system/cpu/intel_pstate/no_turbo > data/p1-results/avx2single-no-turbo.txt
+./build-rel/bin/ann_distance_bench --benchmark_filter='^Distance/(L2|IP)/(Scalar|AVX2Single)/128$' --benchmark_min_warmup_time=0.2 --benchmark_min_time=0.5s --benchmark_repetitions=5 --benchmark_out=data/p1-results/avx2single-128.json --benchmark_out_format=json
+```
+
+本轮仍为单线程、不显式绑核，最短预热 0.2 秒、每次最短测量 0.5 秒、重复 5 次。
+接电、电源模式、CPU 型号/核心数及频率策略随结果记录。
+加速比使用本轮 Scalar mean / AVX2Single mean（CPU 列），不要直接拿上次标量数字作为分子。
+比较其他维度时去掉 filter 并使用新的输出文件名；本轮 128 维结果记录如下。
+
+### 单累加器实测结果
+
+2026-10-19 23:42（Asia/Shanghai），用户已完成上述 128 维对比，原始 JSON 为
+`data/p1-results/avx2single-128.json`。rel、san 的完整测试日志均为 35 个通过、0 个失败，
+未发现 Sanitizer 告警。编译时遇到 GCC 11 函数地址常量比较错误，已改为显式布尔模板标记；
+同时将 `DoNotOptimize` 的结果参数改为非 const 左值，消除弃用警告。
+本轮 Scalar 与 AVX2 使用修正后的同一套测量框架，历史标量记录仅供参考。
+
+| 环境项 | 本轮记录 |
+|---|---|
+| CPU / 物理核数 / 逻辑线程数 | Intel Core i7-14650HX / 16 / 24 |
+| 系统 / 编译器 / 构建 | Ubuntu 22.04.5 LTS / GCC 11.4.0 / RelWithDebInfo |
+| governor / Turbo | cpu0 powersave，其余 CPU 未逐一采样 / no_turbo=0，允许 Turbo |
+| 查询线程 / 绑核 / 输入 | 1 / 未显式绑核 / 128 维、对齐、热缓存 |
+| 最短预热 / 每次最短测量 / 重复 | 0.2 秒 / 0.5 秒 / 5 次 |
+| 接电 / 电源模式 / 内存容量 / 实际持续频率 | 未记录 / 未记录 / 未记录 / 未记录 |
+
+| 函数 | Scalar mean（CPU ns） | AVX2Single mean（CPU ns） | 同轮加速比 | Scalar CV / AVX2 CV |
+|---|---:|---:|---:|---:|
+| L2² / 128 | 63.8192 | 6.8118 | 9.37× | 1.6757% / 0.9371% |
+| 负内积 / 128 | 62.2633 | 5.9057 | 10.54× | 1.0827% / 0.6697% |
+
+这些倍数只说明该机器、当前编译与动态频率条件下，缓存内直接调用的实测收益。
+未绑核和允许 Turbo 仍可能影响不同函数之间的运行条件；CV 较小不等于排除了系统偏差。
+超过 8× 不代表硬件向量宽度变大或已达到计算/带宽上限，完整归因需要后续反汇编及 perf 分析。
+输出的约 140–161 GiB/s 是逻辑读取吞吐，不是 DRAM 实测带宽，也不能将加速比直接套到 Flat QPS。
+目前尚未接入索引运行时派发，下一步保留单累加器对照并实现四累加器。
+
+| 新增追问 | 答案要点 |
+|---|---|
+| 为什么同时检查 AVX2 与 FMA？ | FMA 是独立特性，本实现使用了 fmadd，单检查 AVX2 不足以保证能执行。 |
+| 为什么不加全局 -mavx2？ | 避免编译器在标量或其他路径引入高阶指令，给后续安全派发保留基础。 |
+| 八维向量累加后如何得到标量？ | 合并高低两个 128 位半部，再水平求和，最后加尾部贡献。 |
+| 为什么单累加器之后还要四累加器？ | SIMD 增加每条指令处理的数据量，多累加器进一步减少依赖链对吞吐的限制。 |
 
 ## 关键取舍与面试讲点
 

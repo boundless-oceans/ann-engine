@@ -75,7 +75,10 @@
 - 可选 Google Benchmark v1.9.1 距离微基准（`bench/distance_bench.cpp`、目标 `ann_distance_bench`）已由用户编译并完成 10 个用例的运行检查、128 维标量正式测量
 - 开关 `ANN_BUILD_DISTANCE_BENCHMARKS` 默认 OFF；启用、依赖准备及手动命令见 `bench/README.md`
 - 首次标量缓存内基线与环境已记录在 `bench/README.md`（原始 JSON 在 `data/p1-results/scalar-128.json`）；后续接入 AVX2 时需同轮重测 Scalar，不使用跨环境结果直接计算加速比
-- 下一步实现 AVX2 单累加器，再推进四累加器、运行时派发、对齐分配与构建期内存池
+- AVX2 + FMA 单累加器已编写（`src/distance_avx2.cpp`），支持 loadu 和标量尾部，函数级 ISA 隔离；`SelectDistFn` 尚未接入 SIMD
+- 新增 `tests/distance_avx2_test.cpp`（8 个测试，总计 35 个）和 AVX2Single 微基准条目（总计注册 20 个）；用户已完成编译、rel/san 全部 35 个测试及 128 维同轮对比，完整日志无 Sanitizer 告警，结果与环境见 `bench/README.md` 第 6 节
+- 微基准兼容性修复：用显式布尔模板标记区分 SIMD，避免 GCC 11 不接受函数地址常量比较；DoNotOptimize 使用非 const 结果变量
+- 下一步实现四累加器，与 Scalar、单累加器同轮比较；之后接入运行时派发、对齐分配与构建期内存池
 - 严格 Recall 的原有决定继续保持；构建并行不超过 8 个任务
 
 ## 工作方式约定
