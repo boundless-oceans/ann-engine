@@ -92,4 +92,22 @@ BENCHMARK_TEMPLATE(BM_Distance, ann::InnerProductAVX2, true)
     ->Arg(960)
     ->Unit(benchmark::kNanosecond);
 
+BENCHMARK_TEMPLATE(BM_Distance, ann::L2SqrAVX2Four, true)
+    ->Name("Distance/L2/AVX2Four")
+    ->Arg(16)
+    ->Arg(127)
+    ->Arg(128)
+    ->Arg(129)
+    ->Arg(960)
+    ->Unit(benchmark::kNanosecond);
+
+BENCHMARK_TEMPLATE(BM_Distance, ann::InnerProductAVX2Four, true)
+    ->Name("Distance/IP/AVX2Four")
+    ->Arg(16)
+    ->Arg(127)
+    ->Arg(128)
+    ->Arg(129)
+    ->Arg(960)
+    ->Unit(benchmark::kNanosecond);
+
 }  // namespace
