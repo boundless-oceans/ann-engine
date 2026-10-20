@@ -45,7 +45,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
-| P1 | SIMD 距离 + 内存池 | 🟡 运行时派发通过 rel/san 50 个测试及 128 维微基准；合成/SIFT1M 已复测，内存与 perf 待做 |
+| P1 | SIMD 距离 + 内存池 | 🟡 运行时派发通过 rel/san 50 个测试及 128 维微基准；合成/SIFT1M 已复测；对齐存储通过 63 个测试，构建池与 perf 待做 |
 | P2 | HNSW | ⬜ 未开始 |
 | P3 | IVF + SQ/PQ | ⬜ 未开始 |
 | P4 | 持久化 + 崩溃恢复 | ⬜ 未开始 |
@@ -272,6 +272,12 @@ GCC 11.4、RelWithDebInfo，单线程未绑核，128 维热缓存，预热最短
 选择四累加器，否则回退标量。`FlatIndex` 构造时保存函数指针，`Search` 不做 CPU 检测。
 新增 9 个派发测试与 10 个间接调用微基准（总计 50 个测试、注册 40 个微基准）。用户已完成 rel/san 各 50 个测试，已核对完整日志及 Sanitizer 开关，无相关告警；128 维同轮测量已确认 Dispatch 使用 AVX2Four，端到端合成与全量 SIFT1M 复测已完成，原始输出及结果见微基准说明第 8 节。
 手动验证命令、测量条件与严格 Recall 复核步骤见 [微基准说明第 8 节](bench/README.md#8-运行时-cpu-派发与手动验证)。
+
+当前在 `feat/p1-aligned-memory` 接入 32 字节对齐连续存储：新增 `AlignedAllocator` 与 `AlignedVector<T>`，
+Flat 仍按 n×dim 紧密排列，AVX2 保留 loadu，查询仍只读且零分配。新增 13 个测试，代理已在沙盒完成
+GCC 11.4 rel/san 各 63 个测试；本轮 san 因沙盒 LeakSanitizer 环境错误临时关闭泄漏扫描，
+ASan/UBSan 无告警，默认泄漏检查尚待普通终端补齐。没有新增性能结论或重跑全量 SIFT1M；
+构建期 BuildArena 留到下一块。实现取舍、复现命令与面试点见本地 [对齐内存笔记](docs/learn/aligned-memory.md)。
 
 交付时的面试追问与回答要点汇总在本地 [面试讲点](docs/learn/interview-notes.md)，
 与原 [学习记录](docs/learn/learning-log.md) 分开维护；`docs/learn/` 当前被 Git 忽略，不入库。
