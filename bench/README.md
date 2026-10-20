@@ -7,8 +7,9 @@
 四累加器已在 `feat/p1-avx2-four-accumulators` 子分支完成 rel/san 测试验证与 128 维三版本同轮测量。
 每种函数覆盖 16、127、128、129、960 维，其中 127/129 为后续 SIMD 尾部处理提供对照。
 用户已手动完成编译、10 个用例的运行检查及 128 维标量正式测量；基线结果见下文。
-AVX2 单累加器已由用户编译、完成 rel/san 共 35 个测试与 128 维正式测量；当前注册 20 个微基准。
-当前子分支新增 6 个四累加器测试和 10 个微基准条目，总计 41 个测试、注册 30 个微基准。
+AVX2 单累加器已由用户编译、完成 rel/san 各 35 个测试与 128 维正式测量；该阶段注册 20 个微基准。
+四累加器交付时总计 41 个测试、注册 30 个微基准。
+当前 `feat/p1-distance-dispatch` 新增 9 个派发测试及 10 个间接调用微基准，总计 50 个测试、注册 40 个微基准；rel/san 各 50 个测试通过，128 维同轮微基准已完成，合成与全量 SIFT1M 端到端复测已完成。
 以下命令保留用于复现。
 
 微基准反复计算同一对向量，输入起点按 64 字节对齐，数据可以驻留缓存。
@@ -18,7 +19,8 @@ AVX2 单累加器已由用户编译、完成 rel/san 共 35 个测试与 128 维
 `Scalar` 表示现有源码实现，**不保证机器指令完全没有自动向量化**。
 保持当前编译优化设置，不启用全局 `-march=native`、`-ffast-math`，不刻意禁用自动向量化。
 后续使用同一构建配置比较 SIMD，必要时检查反汇编解释差异。
-本轮使用直接调用，不测量运行时函数指针派发开销；后者留到派发接入时单独测量。
+历史 Scalar/AVX2Single/AVX2Four 条目使用直接调用；新增 Dispatch 条目在计时外选好函数指针，
+循环内仅做间接调用。它不把特性探测和函数选择的初始化成本算进每次距离计算。
 
 ## 1. 准备持久依赖目录
 
@@ -44,7 +46,7 @@ ctest --preset rel
 ./build-rel/bin/ann_distance_bench --benchmark_dry_run
 ```
 
-当前子分支预期：共 41 个测试通过，列表列出 30 个微基准，dry run 每项仅执行一次。
+当前派发子分支预期：共 50 个测试通过，列表列出 40 个微基准，dry run 每项仅执行一次。
 AVX2 测试及微基准在不支持 AVX2/FMA 的 CPU 上跳过，不能把跳过视为已验证 SIMD。
 dry run 用于检查运行链路，不用于记录性能。无需重跑 SIFT1M。
 
@@ -151,7 +153,7 @@ PY
 x86 GCC/Clang 上调用者必须先确认 AVX2 和 FMA 均可用，当前测试和微基准在测量外检查；
 其他编译器/平台提供标量回退，微基准会跳过这些平台的 AVX2 条目。
 函数属性的作用见 [GCC 文档](https://gcc.gnu.org/onlinedocs/gcc-12.3.0/gcc/x86-Function-Attributes.html)。
-运行时派发尚未接入，`SelectDistFn` 仍返回原标量函数，所以这一轮不需要重跑全量 SIFT1M。
+单累加器交付时尚未接入运行时派发，所以当时未重跑全量 SIFT1M；最新派发验证见第 8 节。
 
 设计取舍：单累加器易于验证，保留为四累加器的对照，但存在循环携带的 FMA 依赖链。
 先用 loadu 支持通用输入；后续对齐容器和对齐加载的收益应另行测量。
@@ -218,7 +220,7 @@ cat /sys/devices/system/cpu/intel_pstate/no_turbo > data/p1-results/avx2single-n
 未绑核和允许 Turbo 仍可能影响不同函数之间的运行条件；CV 较小不等于排除了系统偏差。
 超过 8× 不代表硬件向量宽度变大或已达到计算/带宽上限，完整归因需要后续反汇编及 perf 分析。
 输出的约 140–161 GiB/s 是逻辑读取吞吐，不是 DRAM 实测带宽，也不能将加速比直接套到 Flat QPS。
-目前尚未接入索引运行时派发，四累加器保留单累加器对照，最新三版本结果见第 7 节。
+该次测量时尚未接入索引运行时派发，四累加器保留单累加器对照，三版本结果见第 7 节。
 
 | 新增追问 | 答案要点 |
 |---|---|
@@ -233,7 +235,7 @@ cat /sys/devices/system/cpu/intel_pstate/no_turbo > data/p1-results/avx2single-n
 新增入口 `L2SqrAVX2Four` 和 `InnerProductAVX2Four`；现有单累加器入口保留。
 两种版本共享 CPU/内存前提：x86 GCC/Clang 上直接调用要求 AVX2 和 FMA，允许非 32 字节对齐输入，
 支持任意维度，dim=0 不读取输入。其他平台回退标量，测试与微基准跳过其 SIMD 用例。
-当前 `SelectDistFn` 仍返回标量；本次没有修改索引查询路径。
+该子分支交付时 `SelectDistFn` 仍返回标量，没有修改索引查询路径；后续派发实现见第 8 节。
 
 四累加器主循环每轮处理 32 维，分别累加偏移 0、8、16、24 的八维块。
 循环结束按 `(acc0 + acc1) + (acc2 + acc3)` 合并，继续处理完整的八维块，
@@ -322,9 +324,139 @@ cat /sys/devices/system/cpu/intel_pstate/no_turbo > data/p1-results/avx2four-no-
 
 按同轮 CPU 均值，四累加器相对单累加器的耗时减少约 26.12%（L2²）、9.40%（负内积）。
 这是实测现象，不能单凭该结果确认依赖链是唯一原因；调用开销、加载吞吐、编译器调度与频率/核心差异
-都可能影响两种函数的收益，后续仍需反汇编与 perf 分析。尚未将四累加器派发给 FlatIndex。
+都可能影响两种函数的收益，后续仍需反汇编与 perf 分析。该次测量时尚未将四累加器派发给 FlatIndex。
 本轮未保存 `avx2four-governor.txt` 和 `avx2four-no-turbo.txt`，表中据实记录缺项，不用事后采样替代过去状态。
 后续可复现比较须在测量前保存完整环境；P1 的派发、内存与 perf 工作尚未完成。
+
+## 8. 运行时 CPU 派发与手动验证
+
+当前分支 `feat/p1-distance-dispatch` 从已合入四累加器的 P1 集成分支创建。
+用户已完成编译、rel/san 各 50 个测试与 128 维同轮微基准。已核对两套完整 LastTest.log 均为 50 个通过、0 个失败；san 的 CMakeCache 确认 Debug、ASan/UBSan 均 ON，日志无相关告警。合成与全量 SIFT1M 端到端复测已完成，严格 Recall 与 P0 汇总值一致，原 1.0 目标仍未达成。
+
+### 实现与取舍
+
+- `CpuFeatures::Get()` 用局部 const static 缓存一次 CPU 检测结果，不修改共享特性状态。
+- x86 GCC/Clang 下通过 builtin 探测 AVX2/FMA；其他平台/编译器暂报告不可用并回退标量。
+- `SelectDistFn` 只有在 AVX2 与 FMA 都可用时返回四累加器；不满足时返回标量。
+- FlatIndex 已在构造时存储函数指针，这轮无需修改 Search，查询中不重复检测 CPU。
+- `SelectDistFnScalar` 返回标量入口，便于独立参考；不提供修改全局后端的开关。
+- 余弦仍是负内积临时回退，没有实现归一化；未知枚举值保留此前负内积回退行为。
+- 当前按特性选择，不声称所有维度都取得最优速度；短向量的阈值策略需要额外测量与决定。
+
+选择函数指针便于维护多个实现和安全回退，代价是间接调用及可能失去内联机会。
+高阶指令继续由函数级 target 属性隔离，不把 -mavx2/-mfma 加给普通检测或调用路径。
+局部 static 初始化具备语言层面的线程安全，但这不改变 Add/Search 不可并发的索引契约。
+GCC 检测 builtin 的规则见 [官方文档](https://gcc.gnu.org/onlinedocs/gcc-11.2.0/gcc/x86-Built-in-Functions.html)。
+
+内部头 `src/distance_dispatch.h` 暴露纯选择函数给测试，不进入公共 include/ann 接口。
+新增 9 个测试覆盖无特性、单项特性、双项特性、实际主机缓存、标量约定、独立 double 参考和 Flat 集成。
+模拟特性只检查返回地址，不调用潜在不支持的 SIMD 指令；这些测试能验证选择逻辑，
+但不能代替在真实无 AVX2 机器上的执行验证。
+
+### 手动 rel / san 验证
+
+```bash
+cmake --build --preset rel --target ann_tests ann_bench ann_distance_bench ann_recall_diag -j 8
+./build-rel/bin/ann_tests --gtest_filter='DistanceDispatch.*'
+ctest --preset rel
+cmake --preset san -DANN_BUILD_DISTANCE_BENCHMARKS=OFF -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-deps/googletest-1.15.2"
+cmake --build --preset san --target ann_tests -j 8
+ctest --preset san
+```
+
+预期派发 9 个测试通过，rel 和 san 各通过 50 个测试；支持 AVX2/FMA 的开发机不应跳过 SIMD 用例。
+若 rel 开关被关掉，按第 2 节重新配置；不要删除已有本地依赖。
+
+### 间接调用微基准
+
+Dispatch 条目在测量外选择一次地址，并让指针对优化器不透明；测量循环与直接调用使用相同输入、屏障。
+因此比较的是“已选择指针后的距离调用”与直接调用，不是整个 Flat Search，也不包含 CPUID 初始化成本。
+
+```bash
+./build-rel/bin/ann_distance_bench --benchmark_list_tests=true
+./build-rel/bin/ann_distance_bench --benchmark_dry_run
+mkdir -p data/p1-results
+date -Iseconds > data/p1-results/dispatch-date.txt
+lscpu > data/p1-results/dispatch-cpu.txt
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor > data/p1-results/dispatch-governor.txt
+cat /sys/devices/system/cpu/intel_pstate/no_turbo > data/p1-results/dispatch-no-turbo.txt
+./build-rel/bin/ann_distance_bench --benchmark_filter='^Distance/(L2|IP)/(Scalar|AVX2Four|Dispatch)/128$' --benchmark_min_warmup_time=0.2 --benchmark_min_time=0.5s --benchmark_repetitions=5 --benchmark_out=data/p1-results/dispatch-128.json --benchmark_out_format=json
+```
+
+预计列表为 40 项。正式测量仍是单线程未显式绑核，最短预热 0.2 秒、每次最短测量 0.5 秒、重复 5 次，
+另行记录接电、电源模式。观察 Dispatch 标签中的实际后端，用同轮 CPU mean 比较 Dispatch/AVX2Four；
+没有实测前不声称开销为固定百分比。在标量机器上应与 Scalar 比较，不把被跳过的 AVX2 行用作基线。
+
+### 派发同轮实测结果
+
+2026-10-20 18:15（Asia/Shanghai），原始文件 `data/p1-results/dispatch-128.json`。
+文件包含 6 组各 5 次测量，共 30 个 iteration 行，无 error；两组 Dispatch 标签均确认 `indirect-call; AVX2Four`。
+
+| 环境项 | 本轮记录 |
+|---|---|
+| CPU / 物理核数 / 逻辑线程数 | Intel Core i7-14650HX / 16 / 24（沿用同机信息，JSON 确认 24 个逻辑 CPU） |
+| 系统 / 编译器 / 构建 | Ubuntu 22.04.5 / GCC 11.4 / RelWithDebInfo（沿用开发环境，已核对 rel 缓存的构建类型） |
+| governor / Turbo | cpu0 powersave / no_turbo=0，允许 Turbo（本轮独立文本快照） |
+| 频率调节 / 实际频率 | JSON 报告 scaling enabled；实际持续频率未记录，mhz_per_cpu 不作为实测持续频率 |
+| 线程数 / 绑核 / 输入 | 1 / 未显式绑核 / 128 维、对齐、热缓存 |
+| 最短预热 / 每次最短测量 / 重复 | 0.2 秒 / 0.5 秒 / 5 次（本轮执行命令） |
+| 接电 / 电源模式 / 内存容量 | 未记录 / 未记录 / 未记录 |
+
+| CPU mean（ns） | Scalar | AVX2Four 直接调用 | Dispatch 间接调用 | Scalar/Dispatch | Dispatch 相对直接调用耗时变化 |
+|---|---:|---:|---:|---:|---:|
+| L2² / 128 | 51.6159 | 5.1551 | 5.6399 | 9.15× | +9.40%（+0.4848 ns） |
+| 负内积 / 128 | 47.3261 | 5.2800 | 5.0176 | 9.43× | −4.97%（−0.2623 ns） |
+
+| CPU CV | Scalar | AVX2Four | Dispatch |
+|---|---:|---:|---:|
+| L2² / 128 | 0.6707% | 0.0815% | 0.0187% |
+| 负内积 / 128 | 0.4804% | 0.0260% | 0.0076% |
+
+本轮各组重复测量的波动较小，但内积间接调用反而更快，说明两组耗时之差不能直接视为
+固定的函数指针调用成本；代码布局、指令调度、频率和核心迁移等都可能影响结果，
+具体原因需要结合反汇编或受控实验，不能仅凭耗时确定。该结果不证明间接调用本身能加速内积。
+Scalar/Dispatch 只使用本轮数据计算，不能将历史 Scalar 数字混入本轮比值，
+也不能将热缓存单对距离的倍数当成 Flat 检索 QPS 倍数。
+
+### Flat 端到端检查
+
+先用与 P0 相同参数的合成数据打通自动派发后的评测：
+
+```bash
+./build-rel/bin/ann_bench --n 100000 --nq 100 --dim 128 --k 10 --metric l2 --warmup 1 --runs 3 | tee data/p1-results/dispatch-synthetic.txt
+```
+
+输出新增 `cpu avx2/fma` 与 `distance fn`；本开发机预计为 yes/yes、AVX2Four。
+这仍是自算答案，Recall=1 不能代替独立正确性验证。通过后再验证完整 SIFT1M：
+
+```bash
+./build-rel/bin/ann_bench --data data --k 10 --metric l2 --warmup 1 --runs 3 | tee data/p1-results/dispatch-sift1m.txt
+```
+
+本轮仍为单线程，预热 1 轮、测量 3 轮。保存环境与原始输出，严格按 ID 计算 Recall 的规则不变。
+由于 FMA 和归约顺序不同，不事先保证严格 Recall 与 P0 数字完全相同；若出现差异，
+使用已重新构建的 ann_recall_diag 复核，不能为追平指标改变计分规则或官方答案。
+P0 测量的频率等条件未完全记录，不直接把新 QPS 除以历史 QPS 当作受控加速比。
+2026-10-20 用户已完成以上两项评测，原始输出分别为
+`data/p1-results/dispatch-synthetic.txt` 与 `data/p1-results/dispatch-sift1m.txt`，两者均报告 yes/yes、AVX2Four。
+
+| 项目 | 合成数据 | 完整 SIFT1M |
+|---|---:|---:|
+| base / 查询 / 维度 | 100000 / 100 / 128 | 1000000 / 10000 / 128 |
+| 严格 Recall@10 | 1.000000（自身生成答案） | 0.999300（官方答案） |
+| QPS | 436.2 | 38.8 |
+| mean / P50（ms） | 2.2926 / 2.2793 | 25.7523 / 25.0932 |
+| P95 / P99 / max（ms） | 2.4128 / 2.4686 / 2.5187 | 28.4243 / 31.7696 / 43.9901 |
+| 索引内存（MiB）/ 构建时间（s） | 48.8 / 0.021 | 488.3 / 0.168 |
+
+测量环境沿用 Intel Core i7-14650HX（16 核/24 线程）、Ubuntu 22.04.5、GCC 11.4、
+RelWithDebInfo；单线程未显式绑核，L2²、k=10，预热 1 轮、正式测量 3 轮。
+端到端执行前未单独保存 governor/Turbo 快照；此前微基准的 powersave、允许 Turbo
+不能当作这两项评测执行时已确认的状态。实际频率、接电、电源模式及物理内存容量未记录。
+
+严格 Recall 的汇总值与 P0 一致，原 1.0 验收仍未达成；相同汇总值不证明每条查询返回 ID 完全相同，
+本轮没有重新逐查询诊断，也不将 P0 的 70 条等距诊断说成本轮新增验证。
+本次输出尚不能定位检索瓶颈；微基准收益没有按同样倍数反映到端到端，后续通过 perf 分析。
 
 ## 关键取舍与面试讲点
 
