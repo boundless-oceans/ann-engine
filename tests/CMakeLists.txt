@@ -43,9 +43,13 @@ add_executable(ann_tests
     smoke_test.cpp        # 骨架连通性测试：先证明"构建→测试"这条链路是通的
     distance_test.cpp     # 距离函数：手算用例 + 度量派发 + 排序约定
     distance_avx2_test.cpp # SIMD：尾部、非对齐输入、double 参考与误差容限
+    distance_dispatch_test.cpp # CPU 检测、组合回退与 Flat 自动派发集成
     flat_test.cpp         # FlatIndex：手算结果、堆替换、边界与批量查询
     # hnsw_test.cpp       HNSW（含 2 维 10 点图结构验证）
 )
+
+# 测试私有纯选择函数，不把模拟 CPU 特性的入口暴露为公共 API。
+target_include_directories(ann_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 target_link_libraries(ann_tests
     PRIVATE

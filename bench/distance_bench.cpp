@@ -9,13 +9,14 @@
 
 namespace {
 
-template<ann::DistFn Distance, bool RequiresAVX2 = false>
+template<ann::DistFn Distance, bool RequiresAVX2 = false, bool RuntimeDispatch = false>
 void BM_Distance(benchmark::State& state) {
     const auto dim = static_cast<size_t>(state.range(0));
     // 显式标记指令集要求，避免在 GCC 11 上对不同函数地址做常量表达式比较。
     if constexpr (RequiresAVX2) {
 #if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-        if (!__builtin_cpu_supports("avx2") || !__builtin_cpu_supports("fma")) {
+        const auto& features = ann::CpuFeatures::Get();
+        if (!features.avx2 || !features.fma) {
             state.SkipWithError("AVX2 and FMA are required");
             return;
         }
@@ -42,18 +43,39 @@ void BM_Distance(benchmark::State& state) {
     benchmark::DoNotOptimize(a_ptr);
     benchmark::DoNotOptimize(b_ptr);
 
+    [[maybe_unused]] ann::DistFn selected = Distance;
+    if constexpr (RuntimeDispatch) {
+        // 普通分支在计时外选择度量，避免再做函数地址常量表达式比较。
+        const auto metric =
+            Distance == ann::L2SqrScalar ? ann::Metric::L2 : ann::Metric::InnerProduct;
+        selected = ann::SelectDistFn(metric);
+        // 令函数指针对优化器不透明，测量与 Flat 成员指针类似的间接调用。
+        benchmark::DoNotOptimize(selected);
+    }
+
     for (auto _ : state) {
         // 配合已逃逸的指针，阻止把固定输入的计算整体移出循环或删掉。
         benchmark::ClobberMemory();
         // 使用非 const 左值匹配 Benchmark 的非弃用重载。
-        ann::dist_t result = Distance(a_ptr, b_ptr, dim);
+        ann::dist_t result = 0.0f;
+        if constexpr (RuntimeDispatch) {
+            result = selected(a_ptr, b_ptr, dim);
+        } else {
+            result = Distance(a_ptr, b_ptr, dim);
+        }
         benchmark::DoNotOptimize(result);
     }
 
     // 一次迭代计算一对向量；字节数是逻辑读取量，不是实际 DRAM 流量。
     state.SetItemsProcessed(state.iterations());
     state.SetBytesProcessed(state.iterations() * static_cast<int64_t>(2 * dim * sizeof(float)));
-    state.SetLabel("hot-cache; aligned-input; direct-call");
+    if constexpr (RuntimeDispatch) {
+        const bool simd = selected == ann::L2SqrAVX2Four || selected == ann::InnerProductAVX2Four;
+        state.SetLabel(simd ? "hot-cache; aligned-input; indirect-call; AVX2Four"
+                            : "hot-cache; aligned-input; indirect-call; Scalar");
+    } else {
+        state.SetLabel("hot-cache; aligned-input; direct-call");
+    }
 }
 
 BENCHMARK_TEMPLATE(BM_Distance, ann::L2SqrScalar)
@@ -103,6 +125,24 @@ BENCHMARK_TEMPLATE(BM_Distance, ann::L2SqrAVX2Four, true)
 
 BENCHMARK_TEMPLATE(BM_Distance, ann::InnerProductAVX2Four, true)
     ->Name("Distance/IP/AVX2Four")
+    ->Arg(16)
+    ->Arg(127)
+    ->Arg(128)
+    ->Arg(129)
+    ->Arg(960)
+    ->Unit(benchmark::kNanosecond);
+
+BENCHMARK_TEMPLATE(BM_Distance, ann::L2SqrScalar, false, true)
+    ->Name("Distance/L2/Dispatch")
+    ->Arg(16)
+    ->Arg(127)
+    ->Arg(128)
+    ->Arg(129)
+    ->Arg(960)
+    ->Unit(benchmark::kNanosecond);
+
+BENCHMARK_TEMPLATE(BM_Distance, ann::InnerProductScalar, false, true)
+    ->Name("Distance/IP/Dispatch")
     ->Arg(16)
     ->Arg(127)
     ->Arg(128)

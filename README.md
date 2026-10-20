@@ -45,7 +45,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
-| P1 | SIMD 距离 + 内存池 | 🟡 四累加器通过 rel/san 41 个测试及 128 维同轮测量；派发、内存与 perf 待做 |
+| P1 | SIMD 距离 + 内存池 | 🟡 运行时派发通过 rel/san 50 个测试及 128 维微基准；合成/SIFT1M 已复测，内存与 perf 待做 |
 | P2 | HNSW | ⬜ 未开始 |
 | P3 | IVF + SQ/PQ | ⬜ 未开始 |
 | P4 | 持久化 + 崩溃恢复 | ⬜ 未开始 |
@@ -249,7 +249,7 @@ RelWithDebInfo，cpu0 powersave、允许 Turbo，单线程未显式绑核；128 
 新增 AVX2 + FMA 单累加器 L2²/负内积、8 个测试与 10 个微基准条目，已由用户编译并完成 rel/san
 全部 35 个测试及 128 维正式测量，完整日志无 Sanitizer 告警。
 支持任意维度和非 32 字节对齐的输入；高阶指令通过函数属性隔离，测试与微基准先检查 CPU 特性。
-当前 `SelectDistFn` 仍选择标量；手动 rel/san 检查及同轮 Scalar/AVX2 测量命令见微基准说明第 6 节。
+单累加器验收时 `SelectDistFn` 仍选择标量；该阶段手动检查及同轮测量命令见微基准说明第 6 节。
 
 2026-10-19 同轮 CPU 均值对比：L2² Scalar 63.8192 ns → AVX2Single 6.8118 ns（9.37×），
 负内积 Scalar 62.2633 ns → AVX2Single 5.9057 ns（10.54×）。环境为 i7-14650HX（16 核/24 线程）、
@@ -257,17 +257,21 @@ Ubuntu 22.04.5、GCC 11.4、RelWithDebInfo，cpu0 powersave、允许 Turbo；单
 128 维热缓存，最短预热 0.2 秒、每次最短测量 0.5 秒、重复 5 次。
 这是单对距离微基准结果，不代表 Flat QPS 同比例提升；详细波动与环境限制见微基准说明。
 
-四累加器开发位于功能子分支 `feat/p1-avx2-four-accumulators`，保留单累加器入口作为对照。
+四累加器已从功能子分支 `feat/p1-avx2-four-accumulators` 合回 P1，保留单累加器入口作为对照。
 新增 6 个测试和 10 个微基准条目（总计 41 个测试、注册 30 个微基准），已完成编译与 rel/san
 全部 41 个测试，完整日志无 Sanitizer 告警；128 维三版本同轮测量已完成。
 rel/san 检查及三版本同轮测量命令见 [微基准说明第 7 节](bench/README.md#7-四累加器子分支与手动验证)。
-验证后再由用户合回 P1 集成分支，不自动执行 Git 写操作。
 
 四累加器同轮 CPU 均值：L2² 为 5.1599 ns，负内积为 5.2830 ns；相对单累加器分别为
 1.35× / 1.10×，相对本轮 Scalar 为 12.34× / 11.00×。环境沿用 i7-14650HX（16 核/24 线程）、
 GCC 11.4、RelWithDebInfo，单线程未绑核，128 维热缓存，预热最短 0.2 秒、测量最短 0.5 秒、重复 5 次。
 本轮 Benchmark 提示频率调节开启，但未保存独立 governor/Turbo 快照，前次 powersave/允许 Turbo
 不作为本轮已确认状态。原始 JSON、完整三版本结果和环境缺项见微基准说明第 7 节。
+
+当前在 `feat/p1-distance-dispatch` 编写运行时派发：通过缓存的 CPU 特性，在同时支持 AVX2 与 FMA 时
+选择四累加器，否则回退标量。`FlatIndex` 构造时保存函数指针，`Search` 不做 CPU 检测。
+新增 9 个派发测试与 10 个间接调用微基准（总计 50 个测试、注册 40 个微基准）。用户已完成 rel/san 各 50 个测试，已核对完整日志及 Sanitizer 开关，无相关告警；128 维同轮测量已确认 Dispatch 使用 AVX2Four，端到端合成与全量 SIFT1M 复测已完成，原始输出及结果见微基准说明第 8 节。
+手动验证命令、测量条件与严格 Recall 复核步骤见 [微基准说明第 8 节](bench/README.md#8-运行时-cpu-派发与手动验证)。
 
 交付时的面试追问与回答要点汇总在本地 [面试讲点](docs/learn/interview-notes.md)，
 与原 [学习记录](docs/learn/learning-log.md) 分开维护；`docs/learn/` 当前被 Git 忽略，不入库。

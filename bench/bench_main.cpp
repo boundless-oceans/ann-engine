@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "ann/distance.h"
 #include "ann/flat.h"
 #include "ann/index.h"
 #include "ann/types.h"
@@ -263,6 +264,11 @@ int main(int argc, char** argv) {
     std::printf("=== ann-engine benchmark ===\n");
     std::printf("index        : %s\n", index.Name());
     std::printf("metric       : %s\n", MetricName(opt.metric));
+    const auto& cpu = ann::CpuFeatures::Get();
+    const auto dist_fn = ann::SelectDistFn(opt.metric);
+    const bool simd = dist_fn == ann::L2SqrAVX2Four || dist_fn == ann::InnerProductAVX2Four;
+    std::printf("cpu avx2/fma : %s/%s\n", cpu.avx2 ? "yes" : "no", cpu.fma ? "yes" : "no");
+    std::printf("distance fn  : %s\n", simd ? "AVX2Four" : "Scalar");
     std::printf("data source  : %s\n", synthetic ? "synthetic" : opt.data_dir.c_str());
     std::printf("base         : %zu x %zu\n", ds.n, ds.dim);
     std::printf("queries      : %zu\n", ds.nq);

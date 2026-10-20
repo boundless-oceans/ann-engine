@@ -71,16 +71,19 @@
 
 **P1 当前工作**：
 
-- `feat/p1-simd-and-memory` 作为 P1 集成分支；具体功能在子分支开发并验证后合回。当前位于 `feat/p1-avx2-four-accumulators`，代理编写代码，用户手动编译、测试与测量及 Git 写操作
+- `feat/p1-simd-and-memory` 作为 P1 集成分支；具体功能在子分支开发并验证后合回。当前位于 `feat/p1-distance-dispatch`，代理编写代码；用户已于 2026-10-20 授权代理自主执行沙盒内安全的构建、测试与测量，Git 写操作仍由用户执行
 - 可选 Google Benchmark v1.9.1 距离微基准（`bench/distance_bench.cpp`、目标 `ann_distance_bench`）已由用户编译并完成 10 个用例的运行检查、128 维标量正式测量
 - 开关 `ANN_BUILD_DISTANCE_BENCHMARKS` 默认 OFF；启用、依赖准备及手动命令见 `bench/README.md`
 - 首次标量缓存内基线与环境已记录在 `bench/README.md`（原始 JSON 在 `data/p1-results/scalar-128.json`）；后续接入 AVX2 时需同轮重测 Scalar，不使用跨环境结果直接计算加速比
-- AVX2 + FMA 单累加器已编写（`src/distance_avx2.cpp`），支持 loadu 和标量尾部，函数级 ISA 隔离；`SelectDistFn` 尚未接入 SIMD
+- AVX2 + FMA 单累加器已编写（`src/distance_avx2.cpp`），支持 loadu 和标量尾部，函数级 ISA 隔离；单累加器验收阶段 `SelectDistFn` 尚未接入 SIMD
 - 新增 `tests/distance_avx2_test.cpp`（8 个测试，总计 35 个）和 AVX2Single 微基准条目（总计注册 20 个）；用户已完成编译、rel/san 全部 35 个测试及 128 维同轮对比，完整日志无 Sanitizer 告警，结果与环境见 `bench/README.md` 第 6 节
 - 微基准兼容性修复：用显式布尔模板标记区分 SIMD，避免 GCC 11 不接受函数地址常量比较；DoNotOptimize 使用非 const 结果变量
 - 四累加器 L2/IP 入口（`L2SqrAVX2Four` / `InnerProductAVX2Four`）及 6 个测试、10 个微基准条目已由用户编译并完成 rel/san 全部 41 个测试，完整日志无 Sanitizer 告警；总计注册 30 个微基准。128 维三版本同轮测量已完成，结果、环境及 governor/Turbo 本轮未采样的缺项见 `bench/README.md` 第 7 节
 - 面试追问与回答要点已按用户要求汇总至 `docs/learn/interview-notes.md`，原 `docs/learn/learning-log.md` 保留；该目录当前被 Git 忽略
-- 四累加器功能子分支具备已通过的测试与 128 维测量记录，待用户提交并合回 P1 集成分支；下一块为运行时派发，之后对齐分配与构建期内存池、perf 分析
+- 四累加器功能子分支已由用户提交并合回 P1 集成分支
+- 运行时派发已编写：`CpuFeatures::Get()` 缓存实际 CPU 特性，`SelectDistFn` 在 AVX2/FMA 同时可用时选择四累加器，否则回退标量；`SelectDistFnScalar` 保留显式标量选择。`FlatIndex` 继续在构造时缓存指针，`Search` 不检测 CPU、不修改成员
+- 新增 9 个派发测试，用户已完成 rel/san 各 50 个测试，已核对完整 LastTest.log 和 san 开关，日志无 Sanitizer 告警；模拟特性只比较地址，不执行不受支持的指令。新增 10 个 Dispatch 间接调用微基准（共注册 40 个）；128 维同轮测量确认后端 AVX2Four，结果与环境见 `bench/README.md` 第 8 节。派发后的合成端到端复测已完成（原始输出 `data/p1-results/dispatch-synthetic.txt`，确认 AVX2Four；自算答案不替代独立召回验证）；全量 SIFT1M 已完成，严格 Recall@10=0.999300，与 P0 汇总值一致；原 1.0 目标仍未达成，结果与环境缺项见 `bench/README.md` 第 8 节
+- 派发设计取舍见 `docs/decisions/0004-runtime-distance-dispatch.md`，学习与面试要点见 `docs/learn/distance-dispatch.md`；之后为对齐分配与构建期内存池、perf 分析
 - 严格 Recall 的原有决定继续保持；构建并行不超过 8 个任务
 
 ## 工作方式约定
@@ -140,6 +143,8 @@
 - 提交信息可以由代理**起草**，用户审阅后自行执行
 
 ### 其他
+
+- 用户已授权代理自主执行沙盒内安全的构建、测试与测量；不要为常规执行重复请求确认，不越过沙盒权限，不执行危险命令；避免重复启动用户正在运行的长评测
 
 - 构建最多使用 8 个并行任务（`-j 8` 或更小）；禁止不带数量的 `-j`，避免内存耗尽
 - 破坏性操作（删除、批量重写）先 dry-run 再执行

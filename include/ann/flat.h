@@ -40,7 +40,7 @@ private:
 
     // 全部向量连续存放（n × dim）。
     // 注意：当前使用 std::vector，未做 SIMD 对齐。
-    // 引入 AVX2 后需替换为 32 字节对齐的容器，并改用对齐加载指令。
+    // 当前 AVX2 使用 loadu，可直接处理这些数据；对齐容器的收益后续单独测量。
     std::vector<float> data_;
     size_t n_ = 0;
 };
