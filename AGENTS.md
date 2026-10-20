@@ -71,7 +71,7 @@
 
 **P1 当前工作**：
 
-- `feat/p1-simd-and-memory` 作为 P1 集成分支；具体功能在子分支开发并验证后合回。当前位于 `feat/p1-distance-dispatch`，代理编写代码；用户已于 2026-10-20 授权代理自主执行沙盒内安全的构建、测试与测量，Git 写操作仍由用户执行
+- `feat/p1-simd-and-memory` 作为 P1 集成分支；具体功能在子分支开发并验证后合回。当前位于 `feat/p1-aligned-memory`，代理编写代码；用户已于 2026-10-20 授权代理自主执行沙盒内安全的构建、测试与测量，Git 写操作仍由用户执行
 - 可选 Google Benchmark v1.9.1 距离微基准（`bench/distance_bench.cpp`、目标 `ann_distance_bench`）已由用户编译并完成 10 个用例的运行检查、128 维标量正式测量
 - 开关 `ANN_BUILD_DISTANCE_BENCHMARKS` 默认 OFF；启用、依赖准备及手动命令见 `bench/README.md`
 - 首次标量缓存内基线与环境已记录在 `bench/README.md`（原始 JSON 在 `data/p1-results/scalar-128.json`）；后续接入 AVX2 时需同轮重测 Scalar，不使用跨环境结果直接计算加速比
@@ -83,7 +83,8 @@
 - 四累加器功能子分支已由用户提交并合回 P1 集成分支
 - 运行时派发已编写：`CpuFeatures::Get()` 缓存实际 CPU 特性，`SelectDistFn` 在 AVX2/FMA 同时可用时选择四累加器，否则回退标量；`SelectDistFnScalar` 保留显式标量选择。`FlatIndex` 继续在构造时缓存指针，`Search` 不检测 CPU、不修改成员
 - 新增 9 个派发测试，用户已完成 rel/san 各 50 个测试，已核对完整 LastTest.log 和 san 开关，日志无 Sanitizer 告警；模拟特性只比较地址，不执行不受支持的指令。新增 10 个 Dispatch 间接调用微基准（共注册 40 个）；128 维同轮测量确认后端 AVX2Four，结果与环境见 `bench/README.md` 第 8 节。派发后的合成端到端复测已完成（原始输出 `data/p1-results/dispatch-synthetic.txt`，确认 AVX2Four；自算答案不替代独立召回验证）；全量 SIFT1M 已完成，严格 Recall@10=0.999300，与 P0 汇总值一致；原 1.0 目标仍未达成，结果与环境缺项见 `bench/README.md` 第 8 节
-- 派发设计取舍见 `docs/decisions/0004-runtime-distance-dispatch.md`，学习与面试要点见 `docs/learn/distance-dispatch.md`；之后为对齐分配与构建期内存池、perf 分析
+- 派发设计取舍见 `docs/decisions/0004-runtime-distance-dispatch.md`，学习与面试要点见 `docs/learn/distance-dispatch.md`；运行时派发已由用户提交合回 P1；当前推进对齐分配，之后为构建期内存池、perf 分析
+- 对齐存储已实现：新增 `memory_pool.h/.cpp`，AlignedAllocator 使用 posix_memalign/free，AlignedVector 以标准容器加自定义分配器管理生命周期；Flat 紧密布局与 loadu 保持不变，MemoryUsage 统计申请容量。新增 13 个测试，总计 rel/san 各 63 个通过；代理在沙盒执行，ccache 临时禁用，san 因 LeakSanitizer 环境错误设置 detect_leaks=0，ASan/UBSan 无告警，泄漏检测待普通终端补齐。本块未重跑全量 SIFT1M，无新性能结论。取舍见 ADR-0005，学习笔记 `docs/learn/aligned-memory.md`；BuildArena 尚未实现
 - 严格 Recall 的原有决定继续保持；构建并行不超过 8 个任务
 
 ## 工作方式约定
