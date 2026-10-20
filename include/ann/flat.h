@@ -1,4 +1,5 @@
-// 暴力检索索引。精确，Recall 恒为 1.0，单次查询复杂度 O(n × dim)。
+// 暴力检索索引。穷举精确距离，严格 ID Recall 仍受等距点选择影响。
+// 单次查询扫描的距离计算复杂度 O(n × dim)。
 //
 // 两个用途：
 //   1. 性能基准 —— 后续所有优化的对照点
@@ -10,10 +11,9 @@
 #ifndef ANN_FLAT_H
 #define ANN_FLAT_H
 
-#include <vector>
-
 #include "ann/distance.h"
 #include "ann/index.h"
+#include "ann/memory_pool.h"
 
 namespace ann {
 
@@ -31,7 +31,7 @@ public:
     const char* Name() const override { return "Flat"; }
 
     // 只读访问原始向量数据。bench 用它计算查询与库向量的配对情况。
-    const float* Data() const noexcept { return data_.data(); }
+    const float* Data() const noexcept { return data_.Data(); }
 
 private:
     size_t dim_;
@@ -39,9 +39,8 @@ private:
     DistFn dist_fn_;
 
     // 全部向量连续存放（n × dim）。
-    // 注意：当前使用 std::vector，未做 SIMD 对齐。
-    // 当前 AVX2 使用 loadu，可直接处理这些数据；对齐容器的收益后续单独测量。
-    std::vector<float> data_;
+    // 数组起点按 32 字节对齐；无行填充，非八倍数维度的后续行仍可能不对齐。
+    AlignedVector<float> data_;
     size_t n_ = 0;
 };
 

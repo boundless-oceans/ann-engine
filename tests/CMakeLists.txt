@@ -44,6 +44,7 @@ add_executable(ann_tests
     distance_test.cpp     # 距离函数：手算用例 + 度量派发 + 排序约定
     distance_avx2_test.cpp # SIMD：尾部、非对齐输入、double 参考与误差容限
     distance_dispatch_test.cpp # CPU 检测、组合回退与 Flat 自动派发集成
+    memory_pool_test.cpp  # 对齐、扩容、对象生命周期与 Flat 存储集成
     flat_test.cpp         # FlatIndex：手算结果、堆替换、边界与批量查询
     # hnsw_test.cpp       HNSW（含 2 维 10 点图结构验证）
 )
