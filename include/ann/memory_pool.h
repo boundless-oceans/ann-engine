@@ -1,4 +1,4 @@
-// 对齐分配与连续容器；构建期内存池将在后续单独实现。
+// 对齐分配、连续容器与构建期内存池。
 #pragma once
 #ifndef ANN_MEMORY_POOL_H
 #define ANN_MEMORY_POOL_H
@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <type_traits>
@@ -20,6 +21,31 @@ public:
     // 对齐必须是至少 sizeof(void*) 的二次幂；零字节返回 nullptr。
     static void* Allocate(size_t bytes, size_t align = kAlignment);
     static void Deallocate(void* p) noexcept;
+};
+
+// 非线程安全的构建期单调池，不接入 Search 热路径。
+class BuildArena {
+public:
+    // initial_bytes 是首块大小提示；实际内存按需申请。
+    explicit BuildArena(size_t initial_bytes = 1u << 20);
+    ~BuildArena();
+    BuildArena(const BuildArena&) = delete;
+    BuildArena& operator=(const BuildArena&) = delete;
+    BuildArena(BuildArena&&) = delete;
+    BuildArena& operator=(BuildArena&&) = delete;
+
+    std::pmr::memory_resource* Resource() noexcept;
+    // 必须先销毁使用池内存的对象/容器；Reset 不调用这些对象的析构函数。
+    // 所有旧分配失效，保留内存块供下一轮复用，Resource 地址不变。
+    void Reset() noexcept;
+    // 本轮累计成功申请的用户字节数，不因单独 deallocate 而减少。
+    size_t UsedBytes() const noexcept;
+    // 所有已缓存块的申请字节数，含单调池块内开销，不含缓存元数据。
+    size_t CapacityBytes() const noexcept;
+
+private:
+    struct State;
+    std::unique_ptr<State> state_;
 };
 
 namespace detail {
