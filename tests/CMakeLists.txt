@@ -46,6 +46,7 @@ add_executable(ann_tests
     distance_dispatch_test.cpp # CPU 检测、组合回退与 Flat 自动派发集成
     memory_pool_test.cpp  # 对齐、扩容、对象生命周期与 Flat 存储集成
     build_arena_test.cpp  # 构建池统计、对齐、重置复用与 pmr 容器生命周期
+    hnsw_graph_test.cpp   # 图存储、小图边关系与扩容后的 ID 稳定性
     flat_test.cpp         # FlatIndex：手算结果、堆替换、边界与批量查询
     # hnsw_test.cpp       HNSW（含 2 维 10 点图结构验证）
 )
