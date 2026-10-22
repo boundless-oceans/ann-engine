@@ -20,6 +20,7 @@ add_library(ann_core
 
     # ---- 索引层 ----
     flat.cpp            # FlatIndex：暴力检索 / ground-truth 生成器
+    hnsw_graph.cpp      # HNSW：定长邻居槽位与按节点层数分配的上层池
 
     # ---- 尚未实现的模块：实现时取消注释，并加入上面的源文件列表 ----
     # hnsw.cpp          分层图索引（HNSW）
