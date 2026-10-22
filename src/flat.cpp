@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 namespace ann {
 namespace {
@@ -66,9 +67,32 @@ void FlatIndex::Add(size_t n, const float* vecs) {
         return;
     }
 
-    // 先 reserve 再一次插入：data_ 只增不减，反复扩容会拷贝全部已有向量
-    data_.reserve(data_.size() + n * dim_);
-    data_.insert(data_.end(), vecs, vecs + n * dim_);
+    // 先验证 ID 和长度，再扩容；失败时索引内容及大小保持不变。
+    if (n > static_cast<size_t>(kInvalidIdx) - n_) {
+        throw std::length_error("vector count exceeds available IDs");
+    }
+    const size_t old_size = data_.Size();
+    if (dim_ != 0 && n > (std::numeric_limits<size_t>::max() - old_size) / dim_) {
+        throw std::length_error("vector storage size overflow");
+    }
+    const size_t count = n * dim_;
+    // 支持把 Data() 的子区间重新 Add：扩容前记偏移，避免原地址失效。
+    const auto begin = reinterpret_cast<uintptr_t>(data_.Data());
+    const auto source = reinterpret_cast<uintptr_t>(vecs);
+    const bool aliases =
+        old_size != 0 && source >= begin && (source - begin) / sizeof(float) < old_size;
+    size_t offset = 0;
+    if (aliases) {
+        offset = (source - begin) / sizeof(float);
+        if (count > old_size - offset) {
+            throw std::invalid_argument("source range exceeds stored vectors");
+        }
+    }
+    data_.Resize(old_size + count);
+    if (count != 0) {
+        const float* source_data = aliases ? data_.Data() + offset : vecs;
+        std::copy_n(source_data, count, data_.Data() + old_size);
+    }
 
     n_ += n;
 }
@@ -98,7 +122,7 @@ void FlatIndex::Search(const float* query, size_t k, ResultView out) const {
 
     // ---- 第一步：用前 m 个向量在 out 里建一个大小为 m 的最大堆 ----
     for (size_t i = 0; i < m; ++i) {
-        out.dists[i] = dist_fn_(query, data_.data() + i * dim_, dim_);
+        out.dists[i] = dist_fn_(query, data_.Data() + i * dim_, dim_);
         out.ids[i] = static_cast<idx_t>(i);
     }
     // 自底向上建堆：从最后一个非叶结点开始逐个下滤，复杂度 O(m)
@@ -110,7 +134,7 @@ void FlatIndex::Search(const float* query, size_t k, ResultView out) const {
     // 堆顶是"已保留的 m 个里最差的"。新距离比它小就顶掉它，然后恢复堆序。
     // 绝大多数向量在第 3 行的比较里就被拒掉了，这是 O(n log m) 里那个 log m 很便宜的原因。
     for (size_t i = m; i < n_; ++i) {
-        const dist_t d = dist_fn_(query, data_.data() + i * dim_, dim_);
+        const dist_t d = dist_fn_(query, data_.Data() + i * dim_, dim_);
         if (d < out.dists[0]) {
             out.dists[0] = d;
             out.ids[0] = static_cast<idx_t>(i);
@@ -150,8 +174,8 @@ Metric FlatIndex::GetMetric() const {
 
 size_t FlatIndex::MemoryUsage() const {
     // 用 capacity 而不是 size：内存占用看的是实际分配量，不是逻辑长度。
-    // 再加上对象本身（含 vector 的控制块与标量成员）。
-    return data_.capacity() * sizeof(float) + sizeof(*this);
+    // 再加上对象本身；不包含 malloc 元数据和内部碎片。
+    return data_.CapacityBytes() + sizeof(*this);
 }
 
 }  // namespace ann

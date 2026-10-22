@@ -62,6 +62,7 @@ project(ann-engine
 #  自定义选项加前缀可以避免和它们撞名。
 # -----------------------------------------------------------------------------
 option(ANN_WARNINGS_AS_ERRORS "把编译警告视为错误（建议只在 CI 中开启）" OFF)
+option(ANN_BUILD_DISTANCE_BENCHMARKS "Build distance microbenchmarks with Google Benchmark" OFF)
 
 
 # -----------------------------------------------------------------------------

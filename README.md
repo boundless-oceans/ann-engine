@@ -7,7 +7,7 @@
 从零实现的高性能 ANN 检索引擎（C++20）。**手写** HNSW / IVF 索引与 PQ/SQ 量化，
 不依赖 Faiss 等现成库，并与 Faiss 做性能对照。
 
-> **状态：P0 验证中** —— Ubuntu 上 rel 构建的 27 个测试已通过，合成数据评测已跑通；
+> **状态：P1 开始，P0 原验收差异保留** —— Ubuntu 上 rel 构建的 27 个测试已通过，合成数据评测已跑通；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；全量 SIFT1M 严格 Recall@10=0.999300，
 > 70 条差异已确认为同距离点的不同选择。保留严格指标与原验收标准，尚未达到 1.0。
 
@@ -45,7 +45,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
-| P1 | SIMD 距离 + 内存池 | ⬜ 未开始 |
+| P1 | SIMD 距离 + 内存池 | 🟡 运行时派发通过 rel/san 50 个测试及 128 维微基准；合成/SIFT1M 已复测；集成分支 rel/san 各 73 个通过，40 项微基准运行检查通过；初步 perf 分析已完成 |
 | P2 | HNSW | ⬜ 未开始 |
 | P3 | IVF + SQ/PQ | ⬜ 未开始 |
 | P4 | 持久化 + 崩溃恢复 | ⬜ 未开始 |
@@ -233,6 +233,67 @@ tail -n 10 data/p0-results/recall-diag.txt
 `both_distance_equivalent_to_reference=70`、`unresolved_queries=0`。
 原始明细在 `data/p0-results/recall-diag.txt`（本地文件，不入库）；另已逐条核对输出，
 70 条差异查询的距离一致性均为完全相等，并非仅依赖诊断分类容差。
+
+## P1 距离微基准
+
+已新增可选目标 `ann_distance_bench`，使用 Google Benchmark v1.9.1 测量现有标量 L2² 与负内积，
+覆盖 16、127、128、129、960 维；用户已完成编译、运行检查与 128 维正式测量。
+依赖准备、构建、检查、测量环境及运行命令见 [微基准说明](bench/README.md)。
+采用相同配置比较后续 AVX2 单累加器与四累加器版本；单对热缓存的 ns 结果不能直接代替检索 QPS。
+
+首次标量 CPU 耗时均值：L2² 为 **57.7895 ns**，负内积为 **48.7095 ns**，CV 分别为
+1.8742% / 1.6883%。测量环境为 i7-14650HX（16 核/24 线程）、Ubuntu 22.04.5、GCC 11.4、
+RelWithDebInfo，cpu0 powersave、允许 Turbo，单线程未显式绑核；128 维热缓存输入，最短预热
+0.2 秒、每次最短测量 0.5 秒、重复 5 次。完整记录与限制见微基准说明。
+
+新增 AVX2 + FMA 单累加器 L2²/负内积、8 个测试与 10 个微基准条目，已由用户编译并完成 rel/san
+全部 35 个测试及 128 维正式测量，完整日志无 Sanitizer 告警。
+支持任意维度和非 32 字节对齐的输入；高阶指令通过函数属性隔离，测试与微基准先检查 CPU 特性。
+单累加器验收时 `SelectDistFn` 仍选择标量；该阶段手动检查及同轮测量命令见微基准说明第 6 节。
+
+2026-10-19 同轮 CPU 均值对比：L2² Scalar 63.8192 ns → AVX2Single 6.8118 ns（9.37×），
+负内积 Scalar 62.2633 ns → AVX2Single 5.9057 ns（10.54×）。环境为 i7-14650HX（16 核/24 线程）、
+Ubuntu 22.04.5、GCC 11.4、RelWithDebInfo，cpu0 powersave、允许 Turbo；单线程未绑核，
+128 维热缓存，最短预热 0.2 秒、每次最短测量 0.5 秒、重复 5 次。
+这是单对距离微基准结果，不代表 Flat QPS 同比例提升；详细波动与环境限制见微基准说明。
+
+四累加器已从功能子分支 `feat/p1-avx2-four-accumulators` 合回 P1，保留单累加器入口作为对照。
+新增 6 个测试和 10 个微基准条目（总计 41 个测试、注册 30 个微基准），已完成编译与 rel/san
+全部 41 个测试，完整日志无 Sanitizer 告警；128 维三版本同轮测量已完成。
+rel/san 检查及三版本同轮测量命令见 [微基准说明第 7 节](bench/README.md#7-四累加器子分支与手动验证)。
+
+四累加器同轮 CPU 均值：L2² 为 5.1599 ns，负内积为 5.2830 ns；相对单累加器分别为
+1.35× / 1.10×，相对本轮 Scalar 为 12.34× / 11.00×。环境沿用 i7-14650HX（16 核/24 线程）、
+GCC 11.4、RelWithDebInfo，单线程未绑核，128 维热缓存，预热最短 0.2 秒、测量最短 0.5 秒、重复 5 次。
+本轮 Benchmark 提示频率调节开启，但未保存独立 governor/Turbo 快照，前次 powersave/允许 Turbo
+不作为本轮已确认状态。原始 JSON、完整三版本结果和环境缺项见微基准说明第 7 节。
+
+此前在 `feat/p1-distance-dispatch` 实现运行时派发：通过缓存的 CPU 特性，在同时支持 AVX2 与 FMA 时
+选择四累加器，否则回退标量。`FlatIndex` 构造时保存函数指针，`Search` 不做 CPU 检测。
+新增 9 个派发测试与 10 个间接调用微基准（总计 50 个测试、注册 40 个微基准）。用户已完成 rel/san 各 50 个测试，已核对完整日志及 Sanitizer 开关，无相关告警；128 维同轮测量已确认 Dispatch 使用 AVX2Four，端到端合成与全量 SIFT1M 复测已完成，原始输出及结果见微基准说明第 8 节。
+手动验证命令、测量条件与严格 Recall 复核步骤见 [微基准说明第 8 节](bench/README.md#8-运行时-cpu-派发与手动验证)。
+
+已从 `feat/p1-aligned-memory` 合入 32 字节对齐连续存储：新增 `AlignedAllocator` 与 `AlignedVector<T>`，
+Flat 仍按 n×dim 紧密排列，AVX2 保留 loadu，查询仍只读且零分配。新增 13 个测试，代理已在沙盒完成
+GCC 11.4 rel/san 各 63 个测试；本轮 san 因沙盒 LeakSanitizer 环境错误临时关闭泄漏扫描，
+ASan/UBSan 无告警，用户随后已在普通终端完成包含这些用例的默认 san 检查。没有新增性能结论或重跑全量 SIFT1M；
+对齐存储阶段的实现取舍、复现命令与面试点见本地 [对齐内存笔记](docs/learn/aligned-memory.md)。
+
+当前 `feat/p1-build-arena` 已实现构建期内存池：缓存上游保留单调资源归还的块，Reset 清零用户申请计数、
+保留容量供后续构建复用。Reset 前必须先销毁使用池内存的对象和容器，池非线程安全，不进入 Search。
+新增 10 个测试，GCC 11.4 rel/san 各 73 个通过；本轮沙盒 san 临时关闭 LeakSanitizer，ASan/UBSan 无告警，
+用户已报告普通终端默认 san 的 73 个测试全部通过。当前仅交付基础设施，尚未接入索引构建，无新性能结论；下一步为 perf 分析。
+取舍、生命周期示例及面试要点见本地 [BuildArena 笔记](docs/learn/build-arena.md)。
+
+perf 已进入采集准备：工具可用，但初始探针在代理及用户终端均被拒绝；用户处理后普通终端硬件探针成功，代理环境仍受限。
+已整理 [perf 采集方案](bench/perf.md)，固定 P 核的 Flat 合成负载已采集首轮 IPC≈1.36；缓存与采样已完成首轮：主要 cycles 样本落在 L2SqrAVX2Four，结果、环境与归因边界见采集方案；Scalar/AVX2 的固定 P 核 IPC 对照也已完成，原始数据与解释见采集方案；不宣称已达到 roofline。
+
+2026-10-22 已在 P1 集成提交 `dd1027c` 完成 rel/san 各 73 个测试及 40 项微基准运行检查，
+本轮沙盒 san 仍临时关闭泄漏扫描，用户此前普通终端默认 san 通过记录单独保留。
+阶段交付、性能范围和未验证项见 [P1 集成验证记录](docs/validation/p1.md)，接下来准备 P2 图存储。
+
+交付时的面试追问与回答要点汇总在本地 [面试讲点](docs/learn/interview-notes.md)，
+与原 [学习记录](docs/learn/learning-log.md) 分开维护；`docs/learn/` 当前被 Git 忽略，不入库。
 
 ## 数据集
 
