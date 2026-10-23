@@ -109,13 +109,19 @@
 
 ### 2026-10-23 基础索引集成与接续点
 
-- 已在当前 `feat/p2-hnsw` 实现公开 `include/ann/hnsw.h`、`src/hnsw.cpp`，组合图存储、随机层数和搜索原语；新增 `tests/hnsw_test.cpp` 的13个测试。当前改动尚未由用户提交，Git 写操作仍由用户执行。
+- 已在当前 `feat/p2-hnsw` 实现公开 `include/ann/hnsw.h`、`src/hnsw.cpp`，组合图存储、随机层数和搜索原语；新增 `tests/hnsw_test.cpp` 的13个测试。用户已分三次提交：e17fb6a 实现与测试、27bde47 评测入口、52abb07 文档；Git 写操作仍由用户执行。
 - Add 采用最近 M 连接及反向最近邻裁剪（L0 容量 Mmax0，上层 M），尚无多样性启发式，不保证所有边互反或全图连通。每点规划全部改边后再 Append/提交；当前点规划失败恢复 RNG，已完成批量前缀保留。BuildContext/BuildArena 在一批 Add 内复用，批次结束释放；未注入所有 OOM 点。
 - 用户明确确认：先用函数内局部工作区跑通标准 Search 基线，不新增公开工作区接口。Search 保持 const 且不修改成员，每次有分配和 O(N) 访问表初始化成本，不能称为零分配。SetEfSearch 原子更新，Params 返回构造快照；Add 不可与查询/统计并发。
 - 代理完成 GCC11.4 rel/san 各127个测试；本轮 san 使用 detect_leaks=0，无 ASan/UBSan 告警。用户随后已报告普通终端默认 san 的127项全部通过（5.78秒）；这是用户报告，代理未另行复核该次完整日志。小数据 L2/负内积都与独立 Flat 比较。
 - ann_bench 新增 --index hnsw、--m、--ef-construction、--ef-search，默认仍 Flat；HNSW 合成数据使用独立 Flat 参考，严格 ID Recall 不变；--data 官方 SIFT 答案只允许 L2。
 - 小规模基线原始目录 `data/p2-results/nearest-m-final-us017dob`；完整参数、环境和结果见 `bench/hnsw.md`。该合成5000×16/100查询基线不是全量SIFT1M验收，无P2最终达标结论。MemoryUsage 排除局部构建/查询工作区，不是峰值RSS。
-- 取舍 ADR-0010，学习及面试表 `docs/learn/hnsw-baseline-index.md`。下一步：用户审阅/提交当前块，再记录较大数据最近M基线和推进启发式剪枝。未做全量 SIFT1M、Faiss 对照、真实并发/TSan；不要重复排查 P0 已解释的平局差异。
+- 取舍 ADR-0010，学习及面试表 `docs/learn/hnsw-baseline-index.md`。基础索引已提交，后续先完成较大数据最近M基线，再推进启发式剪枝。未做全量 SIFT1M、Faiss 对照、真实并发/TSan；不要重复排查 P0 已解释的平局差异。
+
+### 2026-10-23 最近 M 真实数据子集基线
+
+- 已在干净提交52abb07上顺序完成 HNSW/Flat 的 SIFT前100000条、128维、10000查询对照，L2、k10；因截断库，参考答案由该子集上的 Flat 重算，严格ID定义不变。HNSW M16/Mmax0=32、efC200/efS64、seed42。完整结果与环境见 bench/hnsw.md，原始目录 data/p2-results/nearest-m-sift100k-a1nvea4c。
+- 环境为 i7-14650HX（16核/24逻辑CPU）、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程固定CPU0、powersave、允许Turbo、预热1轮/正式3轮；开始/完成后均读到接电，电源模式与实际频率未确认。结果为子集基线，不是全量SIFT1M或P2最终验收；核心代码本轮未改，不重复构建/测试。
+- 下一块：按已有设计接入多样性启发式剪枝并补针对性测试，保留当前最近M版本作为同轮对照；尚未进行全量SIFT1M、Faiss或真实并发验证。docs/design和docs/decisions暂保留，用户希望收尾时评估整理后删除，当前未删除。
 
 ## 工作方式约定
 
