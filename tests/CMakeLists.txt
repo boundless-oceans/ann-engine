@@ -53,6 +53,8 @@ add_executable(ann_tests
     hnsw_test.cpp         # HNSW 基础插入、完整查询与独立 Flat 对照
     flat_test.cpp         # FlatIndex：手算结果、堆替换、边界与批量查询
     kmeans_test.cpp       # 聚类初始化、均值、空簇与输入边界
+    ivf_lists_test.cpp    # CSR 偏移、空列表及原始 ID 完整性
+    ivf_test.cpp          # 静态构建、nprobe 查询与独立精确参考
 )
 
 # 测试私有纯选择函数，不把模拟 CPU 特性的入口暴露为公共 API。

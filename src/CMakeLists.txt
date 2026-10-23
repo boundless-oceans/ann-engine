@@ -25,9 +25,10 @@ add_library(ann_core
     hnsw_level.cpp      # HNSW：固定种子的随机层数生成
     hnsw_search.cpp     # HNSW：只读贪心下降与单层 ef 搜索
     hnsw.cpp            # HNSW：多样性选邻、反向裁剪与完整索引查询
+    ivf_lists.cpp       # IVF：由簇分配建立静态 CSR 倒排列表
+    ivf.cpp             # IVF：未量化 L2 训练、构建和 nprobe 查询
 
     # ---- 尚未实现的模块：实现时取消注释，并加入上面的源文件列表 ----
-    # ivf.cpp           倒排索引（IVF）
     # quantizer.cpp     标量量化 / 乘积量化（SQ / PQ）
     # storage.cpp       索引序列化与加载
     # wal.cpp           预写日志与崩溃恢复
