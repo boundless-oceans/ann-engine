@@ -16,19 +16,26 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "ann/distance.h"
-#include "ann/flat.h"
-#include "ann/index.h"
-#include "ann/types.h"
 #include "dataset.h"
 #include "metrics.h"
+
+#include "ann/distance.h"
+#include "ann/flat.h"
+#include "ann/hnsw.h"
+#include "ann/index.h"
+#include "ann/types.h"
 
 namespace {
 
 struct Options {
+    std::string index = "flat";
+    ann::HNSWParams hnsw;
     size_t n = 100000;        // 合成数据的 base 向量数
     size_t nq = 1000;         // 查询数
     size_t dim = 128;         // 维度
@@ -48,6 +55,10 @@ void PrintUsage() {
         "usage: ann_bench [options]\n"
         "\n"
         "options:\n"
+        "  --index <name>    flat | hnsw (default flat)\n"
+        "  --m <int>         HNSW M, Mmax0=2*M (default 16)\n"
+        "  --ef-construction <int> HNSW build width (default 200)\n"
+        "  --ef-search <int> HNSW search width (default 64)\n"
         "  --n <int>         number of base vectors for synthetic data (default 100000)\n"
         "  --nq <int>        number of queries (default 1000)\n"
         "  --dim <int>       vector dimension (default 128)\n"
@@ -76,6 +87,26 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
         if (a == "-h" || a == "--help") {
             PrintUsage();
             return false;
+        } else if (a == "--index") {
+            const char* v = need_value("--index");
+            if (v == nullptr)
+                return false;
+            opt->index = v;
+        } else if (a == "--m") {
+            const char* v = need_value("--m");
+            if (v == nullptr)
+                return false;
+            opt->hnsw.M = static_cast<size_t>(std::strtoull(v, nullptr, 10));
+        } else if (a == "--ef-construction") {
+            const char* v = need_value("--ef-construction");
+            if (v == nullptr)
+                return false;
+            opt->hnsw.ef_construction = static_cast<size_t>(std::strtoull(v, nullptr, 10));
+        } else if (a == "--ef-search") {
+            const char* v = need_value("--ef-search");
+            if (v == nullptr)
+                return false;
+            opt->hnsw.ef_search = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--n") {
             const char* v = need_value("--n");
             if (v == nullptr) return false;
@@ -133,6 +164,23 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
     if (opt->n == 0 || opt->nq == 0 || opt->dim == 0 || opt->k == 0 || opt->runs == 0) {
         std::fprintf(stderr, "error: n / nq / dim / k / runs must all be positive\n");
         return false;
+    }
+    if (opt->index != "flat" && opt->index != "hnsw") {
+        std::fprintf(stderr, "error: index must be flat or hnsw\n");
+        return false;
+    }
+    if (opt->index == "hnsw" && (opt->hnsw.M < 2 || opt->hnsw.M > ann::kInvalidIdx / 2 ||
+                                 opt->hnsw.ef_construction == 0 || opt->hnsw.ef_search == 0)) {
+        std::fprintf(stderr, "error: invalid HNSW parameters\n");
+        return false;
+    }
+    if (!opt->data_dir.empty() && opt->metric != ann::Metric::L2) {
+        std::fprintf(stderr, "error: SIFT official ground truth requires l2\n");
+        return false;
+    }
+    if (opt->index == "hnsw") {
+        opt->hnsw.Mmax0 = 2 * opt->hnsw.M;
+        opt->hnsw.seed = opt->seed;
     }
     return true;
 }
@@ -192,7 +240,7 @@ void RunRound(const ann::Index& idx, const float* queries, size_t nq, size_t k,
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int RunBenchmark(int argc, char** argv) {
     Options opt;
     if (!ParseArgs(argc, argv, &opt)) {
         return 1;
@@ -214,7 +262,13 @@ int main(int argc, char** argv) {
     }
 
     // ---------------- 构建索引 ----------------
-    ann::FlatIndex index(ds.dim, opt.metric);
+    std::unique_ptr<ann::Index> owned_index;
+    if (opt.index == "hnsw") {
+        owned_index = std::make_unique<ann::HNSWIndex>(ds.dim, opt.metric, opt.hnsw);
+    } else {
+        owned_index = std::make_unique<ann::FlatIndex>(ds.dim, opt.metric);
+    }
+    ann::Index& index = *owned_index;
 
     const auto build_t0 = std::chrono::steady_clock::now();
     index.Add(ds.n, ds.base.data());
@@ -227,7 +281,14 @@ int main(int argc, char** argv) {
     std::vector<int32_t> gt = ds.groundtruth;
     size_t gt_dim = ds.gt_dim;
     if (gt.empty()) {
-        gt = BuildGroundTruth(&index, ds.queries.data(), ds.nq, opt.k);
+        if (opt.index == "hnsw") {
+            // ANN 不得把自身输出当作答案；独立 Flat 枚举产生严格 ID 参考。
+            ann::FlatIndex reference(ds.dim, opt.metric);
+            reference.Add(ds.n, ds.base.data());
+            gt = BuildGroundTruth(&reference, ds.queries.data(), ds.nq, opt.k);
+        } else {
+            gt = BuildGroundTruth(&index, ds.queries.data(), ds.nq, opt.k);
+        }
         gt_dim = opt.k;
     }
 
@@ -274,6 +335,14 @@ int main(int argc, char** argv) {
     std::printf("queries      : %zu\n", ds.nq);
     std::printf("k            : %zu\n", opt.k);
     std::printf("warmup/runs  : %zu/%zu\n", opt.warmup, opt.runs);
+    if (opt.index == "hnsw") {
+        const auto& hnsw = static_cast<const ann::HNSWIndex&>(index);
+        const auto stats = hnsw.GetStats();
+        std::printf("M/Mmax0      : %zu/%zu\n", hnsw.Params().M, hnsw.Params().Mmax0);
+        std::printf("ef build/run : %zu/%zu\n", hnsw.Params().ef_construction, hnsw.GetEfSearch());
+        std::printf("max level    : %d\n", stats.max_level);
+        std::printf("avg degree0  : %.2f\n", stats.avg_degree_l0);
+    }
     std::printf("\n");
     std::printf("build time   : %.3f s\n", build_seconds);
     std::printf("memory       : %.1f MB\n",
@@ -287,11 +356,22 @@ int main(int argc, char** argv) {
     std::printf("latency max  : %.4f ms\n", st.max);
     std::printf("\n");
 
-    if (synthetic) {
+    if (synthetic && opt.index == "hnsw") {
+        std::printf("note: synthetic ground truth was computed independently with FlatIndex.\n");
+    } else if (synthetic) {
         std::printf("note: synthetic data uses FlatIndex as its own ground truth,\n");
         std::printf("      so recall is 1.0 by construction. Use --data for a real check.\n");
         std::printf("\n");
     }
 
     return 0;
+}
+
+int main(int argc, char** argv) {
+    try {
+        return RunBenchmark(argc, argv);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "error: %s\n", error.what());
+        return 1;
+    }
 }
