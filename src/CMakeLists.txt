@@ -23,9 +23,9 @@ add_library(ann_core
     hnsw_graph.cpp      # HNSW：定长邻居槽位与按节点层数分配的上层池
     hnsw_level.cpp      # HNSW：固定种子的随机层数生成
     hnsw_search.cpp     # HNSW：只读贪心下降与单层 ef 搜索
+    hnsw.cpp            # HNSW：最近邻连接基线与完整索引查询
 
     # ---- 尚未实现的模块：实现时取消注释，并加入上面的源文件列表 ----
-    # hnsw.cpp          分层图索引（HNSW）
     # ivf.cpp           倒排索引（IVF）
     # quantizer.cpp     标量量化 / 乘积量化（SQ / PQ）
     # storage.cpp       索引序列化与加载

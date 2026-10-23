@@ -49,8 +49,8 @@ add_executable(ann_tests
     hnsw_graph_test.cpp   # 图存储、小图边关系与扩容后的 ID 稳定性
     hnsw_level_test.cpp   # 层数边界、种子复现与百万样本分布
     hnsw_search_test.cpp  # 只读分层搜索、候选堆、访问标记与工作区复用
+    hnsw_test.cpp         # HNSW 基础插入、完整查询与独立 Flat 对照
     flat_test.cpp         # FlatIndex：手算结果、堆替换、边界与批量查询
-    # hnsw_test.cpp       HNSW（含 2 维 10 点图结构验证）
 )
 
 # 测试私有纯选择函数，不把模拟 CPU 特性的入口暴露为公共 API。
