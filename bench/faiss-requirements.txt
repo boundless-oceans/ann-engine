@@ -1,0 +1,4 @@
+# 固定 Python 基线版本，不参与 C++ 构建。
+faiss-cpu==1.12.0
+numpy==2.2.6
+packaging==25.0
