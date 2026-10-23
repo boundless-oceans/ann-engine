@@ -1,4 +1,4 @@
-// HNSW 简化基线：最近邻连接，后续再接启发式多样性剪枝。
+// HNSW 分层图索引：启发式多样性选邻与反向超限裁剪。
 #pragma once
 #ifndef ANN_HNSW_H
 #define ANN_HNSW_H

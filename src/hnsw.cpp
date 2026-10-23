@@ -9,6 +9,7 @@
 
 #include "hnsw_graph.h"
 #include "hnsw_level.h"
+#include "hnsw_neighbors.h"
 #include "hnsw_search.h"
 
 namespace ann {
@@ -32,6 +33,8 @@ struct ArenaScope {
 struct BuildContext {
     detail::HNSWSearchWorkspace workspace;
     std::vector<detail::HNSWCandidate> reverse;
+    std::vector<detail::HNSWCandidate> selected;
+    std::vector<detail::HNSWCandidate> reverse_selected;
     BuildArena arena;
 };
 
@@ -75,6 +78,12 @@ struct HNSWIndex::State {
         std::pmr::vector<LinkUpdate> updates(build.arena.Resource());
         std::pmr::vector<idx_t> links(build.arena.Resource());
         try {
+            // 反向裁剪也可能比较新点；在 Append 前从本次输入解析其向量。
+            const auto between = [&](idx_t a, idx_t b) {
+                const auto av = a == id ? query : graph.Vector(a);
+                const auto bv = b == id ? query : graph.Vector(b);
+                return CheckedDistance(distance, av.data(), bv.data(), graph.Dim());
+            };
             auto stage =
                 [&](idx_t node, uint8_t layer, std::span<const detail::HNSWCandidate> chosen) {
                     const size_t offset = links.size();
@@ -97,8 +106,10 @@ struct HNSWIndex::State {
                                                 layer,
                                                 distance,
                                                 build_workspace);
-                    const size_t count = std::min(p.M, candidates.size());
-                    const auto selected = candidates.first(count);
+                    const size_t count =
+                        detail::HNSWSelectNeighbors(candidates, build.selected, between);
+                    const std::span<const detail::HNSWCandidate> selected{build.selected.data(),
+                                                                          count};
                     stage(id, static_cast<uint8_t>(layer), selected);
                     const size_t capacity = graph.SlotCount(static_cast<uint8_t>(layer));
                     for (const auto& candidate : selected) {
@@ -119,12 +130,16 @@ struct HNSWIndex::State {
                                 distance, neighbor_vector.data(), query.data(), graph.Dim()),
                             id);
                         std::sort(reverse_candidates.begin(), reverse_candidates.end());
-                        const size_t retained = std::min(capacity, reverse_candidates.size());
+                        const size_t retained = detail::HNSWSelectNeighbors(
+                            reverse_candidates,
+                            std::span{build.reverse_selected}.first(
+                                std::min(capacity, build.reverse_selected.size())),
+                            between);
                         stage(neighbor,
                               static_cast<uint8_t>(layer),
-                              {reverse_candidates.data(), retained});
+                              {build.reverse_selected.data(), retained});
                     }
-                    // 上一层最接近的候选成为下一层入口，选邻仍只是最近 M 个。
+                    // 下一层入口沿用搜索结果最近点，不依赖剪枝后保留的数量。
                     if (!candidates.empty()) {
                         entry = candidates.front().second;
                     }
@@ -176,6 +191,8 @@ void HNSWIndex::Add(size_t n, const float* vecs) {
     BuildContext build;
     build.workspace.Prepare(total, std::max(state.p.ef_construction, state.p.M));
     build.reverse.reserve(std::min(state.p.Mmax0, total) + 1);
+    build.selected.resize(std::min(state.p.M, total));
+    build.reverse_selected.resize(std::min(state.p.Mmax0, total));
     for (size_t i = 0; i < n; ++i) {
         state.Insert({vecs + i * state.graph.Dim(), state.graph.Dim()}, build);
     }
