@@ -71,7 +71,7 @@
 
 **P1 完成记录**：
 
-- `feat/p1-simd-and-memory` 作为 P1 集成分支；具体功能在子分支开发并验证后合回。P1 已由用户合回 main，当前位于 `feat/p2-hnsw-random-level`，代理编写代码；用户已于 2026-10-20 授权代理自主执行沙盒内安全的构建、测试与测量，Git 写操作仍由用户执行
+- `feat/p1-simd-and-memory` 作为 P1 集成分支；具体功能在子分支开发并验证后合回。P1 已由用户合回 main，当前位于 `feat/p2-hnsw`，代理编写代码；用户已于 2026-10-20 授权代理自主执行沙盒内安全的构建、测试与测量，Git 写操作仍由用户执行
 - 可选 Google Benchmark v1.9.1 距离微基准（`bench/distance_bench.cpp`、目标 `ann_distance_bench`）已由用户编译并完成 10 个用例的运行检查、128 维标量正式测量
 - 开关 `ANN_BUILD_DISTANCE_BENCHMARKS` 默认 OFF；启用、依赖准备及手动命令见 `bench/README.md`
 - 首次标量缓存内基线与环境已记录在 `bench/README.md`（原始 JSON 在 `data/p1-results/scalar-128.json`）；后续接入 AVX2 时需同轮重测 Scalar，不使用跨环境结果直接计算加速比
@@ -92,16 +92,20 @@
 
 ## P2 当前工作
 
-- P2 集成分支为 `feat/p2-hnsw`，当前功能分支 `feat/p2-hnsw-random-level`（图存储已由用户合回 P2），工作区起始干净
+- P2 集成分支为 `feat/p2-hnsw`，当前位于 `feat/p2-hnsw`（图存储与随机层数均已由用户合回；用户2026-10-23明确选择直接在此分支推进相关功能，减少短分支），工作区起始干净
 - 已实现内部 `ann::detail::HNSWGraphStorage`（src/hnsw_graph.h/.cpp），保持设计中的 SoA：AlignedVector<float> 向量、L0 定长槽位、上层 L×M 按节点分配、uint32_t 上层偏移与 uint8_t 层元数据；用 kInvalidIdx 哨兵前缀表示实际邻居，不额外维护度数数组
 - 显式给层数 Append，入口只在新最高层出现时更新；SetNeighbors 只替换有向表，验证邻居存在/同层/无自环/重复/越界/超容量。图存储组件不负责搜索、随机层数、自动双向连接或剪枝，也未公开可查询 HNSWIndex
-- 新增 tests/hnsw_graph_test.cpp 的 13 个用例，含二维十点图、扩容稳定 ID、层间隔离、上层偏移范围等；代理完成 GCC 11.4 rel/san 各 86 个测试，本轮 san 临时 detect_leaks=0、ASan/UBSan 无告警，默认泄漏检查待用户普通终端补齐；P1 的默认 73 项通过不代替本块 86 项验证
+- 新增 tests/hnsw_graph_test.cpp 的 13 个用例，含二维十点图、扩容稳定 ID、层间隔离、上层偏移范围等；代理完成 GCC 11.4 rel/san 各 86 个测试，本轮 san 临时 detect_leaks=0、ASan/UBSan 无告警，用户随后已在普通终端通过默认 san 的全部114个测试，包含本块用例；P1 的默认 73 项通过不代替本块 86 项验证
 - 返回的只读 span 在扩容后可能失效，图边只存 ID/偏移；MemoryUsage 统计实际申请容量。Append 分配失败回滚逻辑状态，但可能保留容量并使旧视图失效；未注入真实 OOM 覆盖所有分配失败点
 - 取舍见 ADR-0007，学习与面试要点见 docs/learn/hnsw-graph-storage.md。该块后续为随机层数（状态见下条），再按设计推进搜索、基础插入、启发式剪枝；尚无 HNSW Recall/QPS 结论
 
 - 随机层数已实现为内部 HNSWLevelGenerator（src/hnsw_level.h/.cpp）：每实例 mt19937_64、默认种子42，M≥2，缓存1/ln(M)，按 floor(-ln(U)/ln(M)) 生成 uint8_t 最高层。高52位中点映射保证0<U<1，极值纯转换饱和到255；不宣称跨libm绝对一致或全图复现
-- 新增10个随机层数测试：边界、同/异种子、状态独立、M=2/4/16/32各百万样本尾分布/均值、5000节点与图存储集成。代理完成 rel/san 各96个测试，本轮san临时detect_leaks=0、ASan/UBSan无告警，默认泄漏检查待普通终端补齐。学习笔记 docs/learn/hnsw-random-level.md，取舍 ADR-0008
-- 下一块：上层贪心下降与单层ef搜索；当前无自动插入、选邻或HNSW Recall/QPS数据。分布公式：P(L≥l)=M^(-l)，E[L]=1/(M−1)；1/ln(M)是缩放因子而非每层晋升概率
+- 新增10个随机层数测试：边界、同/异种子、状态独立、M=2/4/16/32各百万样本尾分布/均值、5000节点与图存储集成。代理完成 rel/san 各96个测试，本轮san临时detect_leaks=0、ASan/UBSan无告警，用户随后已在普通终端通过默认 san 的全部114个测试，包含此前图存储和随机层数用例。学习笔记 docs/learn/hnsw-random-level.md，取舍 ADR-0008
+- 随机层数之后接入搜索原语（见下条）；当前无自动插入、选邻或HNSW Recall/QPS数据。分布公式：P(L≥l)=M^(-l)，E[L]=1/(M−1)；1/ln(M)是缩放因子而非每层晋升概率
+
+- 搜索原语已实现：src/hnsw_search.h/.cpp 内部 HNSWGreedyDescend、HNSWSearchLayer、HNSWSearchWorkspace。只读图，调用方预备并独占工作区；候选最小堆、结果最大堆、字节访问表去重；每节点至多入候选一次，提前预留N个候选及min(N,ef)结果槽位，搜索不扩容，每次清零N字节标记。输出最多ef个，距离/ID排序，可达节点不足时可更少；不改变P0严格Recall
+- 新增18个搜索测试，代理完成GCC11.4 rel/san各114个通过（本轮detect_leaks=0，ASan/UBSan无告警，用户随后已报告普通终端默认 san 的114个测试全部通过）。覆盖double参考、层隔离、ef桥接、环去重、断图、平局、非法参数、工作区复用/隔离、图只读、非有限距离和异常后复用；尚无真实并发/TSan或全局分配器拦截验证
+- 取舍见ADR-0009，讲解 docs/learn/hnsw-layer-search.md；工作区O(N)存储/清零有成本，代际标记等优化留待测量。公开Index签名未改，完整HNSWIndex工作区接入留到索引集成阶段。下一块基础插入和完整查询，目前无HNSW Recall/QPS测量
 
 ## 工作方式约定
 
