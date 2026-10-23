@@ -123,13 +123,22 @@
 - 环境为 i7-14650HX（16核/24逻辑CPU）、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程固定CPU0、powersave、允许Turbo、预热1轮/正式3轮；开始/完成后均读到接电，电源模式与实际频率未确认。结果为子集基线，不是全量SIFT1M或P2最终验收；核心代码本轮未改，不重复构建/测试。
 - 下一块：按已有设计接入多样性启发式剪枝并补针对性测试，保留当前最近M版本作为同轮对照；尚未进行全量SIFT1M、Faiss或真实并发验证。docs/design和docs/decisions暂保留，用户希望收尾时评估整理后删除，当前未删除。
 
-### 2026-10-23 多样性选邻（当前交付）
+### 2026-10-23 多样性选邻（已提交）
 
 - 当前仍在 feat/p2-hnsw，新增私有src/hnsw_neighbors.h与tests/hnsw_neighbors_test.cpp；HNSWSelectNeighbors用于新点选邻和反向超限裁剪，公开接口/SoA布局不变。候选按中心距离/ID排序且唯一，超容量时若到某个已选邻居距离严格小于到中心距离则拒绝；等距本身不拒绝。候选未超容量保留全部，不扩展/回填，允许输出少于M，不保证双向/全局连通；负内积不宣称度量几何保证。
-- 两个独立输出缓冲放在批量BuildContext中；距离回调解析尚未Append的新点输入。仍先规划全部改边再Append/提交，Search未加共享状态；当前改动未提交，Git写操作仍由用户执行。
+- 两个独立输出缓冲放在批量BuildContext中；距离回调解析尚未Append的新点输入。仍先规划全部改边再Append/提交，Search未加共享状态；用户已提交ad30a18实现/测试和2afb07f验证文档，Git写操作仍由用户执行。
 - 新增10项测试，代理完成GCC11.4 rel/san各137项通过，san临时detect_leaks=0，核对完整日志无ASan/UBSan告警。用户随后报告普通终端默认san的137项全部通过（4.33秒），代理未另行复核该次完整日志。覆盖手算方向、输出不足容量、严格平局、全部已选点判断、非有限距离、负内积、待追加点与小M线图导航；未做真实OOM/并发验证。
 - SIFT前100000条/128维/10000查询、L2、k10、M16/Mmax0=32、efC200/efS64、seed42同轮比较完成；严格参考由截断库Flat重算。原始目录data/p2-results/heuristic-compare-ol50x8nm保存旧/新静态链接二进制、摘要、命令、源码和环境快照。环境i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程CPU0、powersave、允许Turbo、接电，warmup1/runs3；实际频率/温度/电源模式未确认。完整数值与局限见bench/hnsw.md；不与历史跨轮耗时直接相除，不宣称百万库或P2最终验收达成。
-- 取舍ADR-0011，手算与面试表docs/learn/hnsw-neighbor-selection.md。下一步用户提交当前块，之后efSearch曲线与全量SIFT1M验证；局部查询分配成本仍保留，未经批准不新增公开工作区接口。
+- 取舍ADR-0011，手算与面试表docs/learn/hnsw-neighbor-selection.md。剪枝块已提交，后续efSearch曲线与全量SIFT1M验证进行中；局部查询分配成本仍保留，未经批准不新增公开工作区接口。
+
+### 2026-10-23 完整SIFT1M与efSearch曲线（当前交付）
+
+- 已扩展bench/bench_main.cpp，--ef-search-list仅适用HNSW且与--ef-search互斥；严格正整数列表、保留顺序/重复，只建图一次，各ef独立warmup/计时/召回，--csv逐行刷新并记录请求/实际max(ef,k)值。新增stderr阶段信息，单值入口仍保留。未改核心索引接口、算法或局部查询工作区。
+- tests/bench_cli_test.cmake新增1项CTest集成检查，无额外Python测试依赖；GCC11.4 rel/san各138项通过（137个GoogleTest+1个CLI），本轮san使用detect_leaks=0，完整日志无ASan/UBSan告警。用户随后报告普通终端默认san的138项全部通过（4.52秒），代理未另行复核该次完整日志。
+- 全量1000000×128、10000查询、L2、k10、M16/Mmax0=32、efC200、seed42，efS16/32/64/128/256同图扫描已完成；官方groundtruth严格ID比较，不截断、不改平局口径。原始目录data/p2-results/sift1m-ef-sweep-1zq_3h4q，基于2afb07f及本轮bench修改，源码/二进制摘要、命令、逐阶段环境均保存。
+- 环境i7-14650HX（16核/24逻辑CPU）、Ubuntu22.04/GCC11.4/RelWithDebInfo/AVX2Four，单线程CPU0、powersave、允许Turbo、接电，每ef预热1/正式3轮，频率/温度/电源模式未确认。曲线与指标见bench/hnsw.md；默认ef64的Recall/P99、构建耗时和索引容量达到相应目标，但Faiss相对吞吐未验证，不宣称P2整体完成。内存统计区分索引申请容量与进程峰值RSS。
+- 可入库汇总bench/results/p2-sift1m-ef-search-20261023.csv及SVG，绘图脚本bench/plot_hnsw_sweep.py仅可选依赖matplotlib；C++构建不依赖它。阶段范围docs/validation/p2.md，学习/面试表docs/learn/hnsw-ef-search-sweep.md。
+- 当前本轮改动未提交，Git写操作仍由用户执行。下一步用户提交评测入口/结果，再准备同条件Python Faiss对照；不静默新增公开工作区接口，不因HNSW达标抹去P0原验收未达成记录。
 
 ## 工作方式约定
 

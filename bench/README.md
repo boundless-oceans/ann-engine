@@ -483,3 +483,5 @@ RelWithDebInfo；单线程未显式绑核，L2²、k=10，预热 1 轮、正式�
 ## 10. HNSW 端到端基线
 
 运行入口、独立 Flat 参考、环境与结果见 [HNSW 评测说明](hnsw.md)。当前已接入多样性剪枝并记录最近 M 同轮对照；全量 SIFT1M 验收待完成。
+
+同图efSearch扫描、CSV导出、完整SIFT1M曲线与验收范围现已记录在 [HNSW评测说明](hnsw.md)。可选绘图脚本为 plot_hnsw_sweep.py，不增加C++构建依赖。
