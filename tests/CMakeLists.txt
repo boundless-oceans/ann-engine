@@ -46,8 +46,12 @@ add_executable(ann_tests
     distance_dispatch_test.cpp # CPU 检测、组合回退与 Flat 自动派发集成
     memory_pool_test.cpp  # 对齐、扩容、对象生命周期与 Flat 存储集成
     build_arena_test.cpp  # 构建池统计、对齐、重置复用与 pmr 容器生命周期
+    hnsw_graph_test.cpp   # 图存储、小图边关系与扩容后的 ID 稳定性
+    hnsw_level_test.cpp   # 层数边界、种子复现与百万样本分布
+    hnsw_search_test.cpp  # 只读分层搜索、候选堆、访问标记与工作区复用
+    hnsw_neighbors_test.cpp # 多样性选邻、反向裁剪及小 M 导航
+    hnsw_test.cpp         # HNSW 基础插入、完整查询与独立 Flat 对照
     flat_test.cpp         # FlatIndex：手算结果、堆替换、边界与批量查询
-    # hnsw_test.cpp       HNSW（含 2 维 10 点图结构验证）
 )
 
 # 测试私有纯选择函数，不把模拟 CPU 特性的入口暴露为公共 API。
@@ -76,3 +80,8 @@ target_link_libraries(ann_tests
 # -----------------------------------------------------------------------------
 include(GoogleTest)
 gtest_discover_tests(ann_tests)
+
+# 复用 CMake 执行 CLI 集成检查，无需额外 Python 依赖。
+add_test(NAME BenchCli.EfSearchSweep
+    COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/bench_cli_test.cmake)

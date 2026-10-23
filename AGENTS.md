@@ -9,7 +9,7 @@
 
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
-> **当前开始 P1，保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
+> **P2 已完成主要本机验收，待用户提交收尾并合回 main；P1 已合回 main，保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
@@ -69,9 +69,9 @@
 
 **验收标准**：`加载 SIFT1M → FlatIndex → Recall@10 == 1.0`，并记录一个基线 QPS 数字。
 
-**P1 当前工作**：
+**P1 完成记录**：
 
-- `feat/p1-simd-and-memory` 作为 P1 集成分支；具体功能在子分支开发并验证后合回。当前位于 `feat/p1-simd-and-memory`，代理编写代码；用户已于 2026-10-20 授权代理自主执行沙盒内安全的构建、测试与测量，Git 写操作仍由用户执行
+- `feat/p1-simd-and-memory` 作为 P1 集成分支；具体功能在子分支开发并验证后合回。P1 已由用户合回 main，当前位于 `feat/p2-hnsw`，代理编写代码；用户已于 2026-10-20 授权代理自主执行沙盒内安全的构建、测试与测量，Git 写操作仍由用户执行
 - 可选 Google Benchmark v1.9.1 距离微基准（`bench/distance_bench.cpp`、目标 `ann_distance_bench`）已由用户编译并完成 10 个用例的运行检查、128 维标量正式测量
 - 开关 `ANN_BUILD_DISTANCE_BENCHMARKS` 默认 OFF；启用、依赖准备及手动命令见 `bench/README.md`
 - 首次标量缓存内基线与环境已记录在 `bench/README.md`（原始 JSON 在 `data/p1-results/scalar-128.json`）；后续接入 AVX2 时需同轮重测 Scalar，不使用跨环境结果直接计算加速比
@@ -87,8 +87,76 @@
 - 对齐存储已实现：新增 `memory_pool.h/.cpp`，AlignedAllocator 使用 posix_memalign/free，AlignedVector 以标准容器加自定义分配器管理生命周期；Flat 紧密布局与 loadu 保持不变，MemoryUsage 统计申请容量。新增 13 个测试，总计 rel/san 各 63 个通过；代理在沙盒执行，ccache 临时禁用，san 因 LeakSanitizer 环境错误设置 detect_leaks=0，ASan/UBSan 无告警，用户随后在普通终端完成默认 san 验证（73 个测试包含这些用例）。本块未重跑全量 SIFT1M，无新性能结论。取舍见 ADR-0005，学习笔记 `docs/learn/aligned-memory.md`；对齐存储阶段尚未实现 BuildArena，后续状态见下条
 - BuildArena 已按用户确认的原语义实现：Reset 保留全部缓存容量，单调资源通过缓存上游复用整块；计数前端统计本轮累计用户申请字节，deallocate 不减少，Reset 清零。initial_bytes 为惰性首块提示，CapacityBytes 统计缓存块申请量。池不可复制/移动、非线程安全，Reset 前必须先销毁使用池的容器（clear 不够），Resource 地址稳定。新增 10 个测试，代理完成 GCC 11.4 rel/san 各 73 个通过，san 临时 detect_leaks=0、ASan/UBSan 无告警，用户已报告普通终端默认 san 的 73 个测试全部通过；未接入索引构建、无新性能数字。取舍见 ADR-0006，学习讲解见 `docs/learn/build-arena.md`。BuildArena 和 perf 文档已由用户提交并合回 P1；集成验证见下条
 - perf 准备（2026-10-22）：已安装 perf 6.8.12，内核 6.8.0-138-generic；perf_event_paranoid=4，代理沙盒及用户普通终端 task-clock 探针均被权限拒绝，未修改系统策略，无 IPC/cache-miss/热点实测。sysfs cpu_core=0-15、cpu_atom=16-23，当前允许 CPU 0-23；采集方案使用 CPU 0。命令、统计范围和待采集项见 `bench/perf.md`，面试要点见 `docs/learn/perf-analysis.md`。用户普通终端处理权限后已成功采集 true 的用户态硬件事件（cpu_atom，非项目测量），代理复查仍读到 paranoid=4 且探针被拒绝；用户固定 CPU 0 的 Flat 合成负载已采到有效 cpu_core IPC≈1.36（cycles=46,519,812,043，instructions=63,241,165,547），原始目录 data/p1-results/perf-OGEgW0；环境与范围见 bench/perf.md。同负载缓存事件比值58.73%，cycles样本自身归属 L2SqrAVX2Four 93.95%、Search 4.40%，报告无丢样本；用户确认接电/Ubuntu 平衡模式。已有初步热点证据，不据此宣称 DRAM 带宽饱和；代理随后沙盒探针成功并顺序完成 Scalar/AVX2Four 的 L2/128 IPC 对照（CPU 0、powersave、允许 Turbo、接电/平衡、单线程、预热0.2s、最短0.5s、5次）：CPU mean 52.5321/5.1699ns，同轮10.16倍；整进程IPC4.59/4.90。结果目录 data/p1-results/perf-OGEgW0/ipc-compare-teb3wh3d，P1 初步 perf 采集/解释已完成，不宣称带宽饱和或达到roofline，详见 bench/perf.md
-- P1 集成回归（2026-10-22，dd1027c）：rel/san 全量构建及各 73 个测试通过，40 项距离微基准列表与 dry run 通过；本轮 san 临时 detect_leaks=0，无 ASan/UBSan 告警，用户此前默认 san 通过记录分开保留。只读确认 perf_event_paranoid=4。本轮无新性能测量/全量 SIFT1M 重跑。阶段验证与局限见 `docs/validation/p1.md`，准备由用户提交收尾文档并合回 main，再建立 P2 集成/图存储子分支；代理尚未开始 P2 实现
+- P1 集成回归（2026-10-22，dd1027c）：rel/san 全量构建及各 73 个测试通过，40 项距离微基准列表与 dry run 通过；本轮 san 临时 detect_leaks=0，无 ASan/UBSan 告警，用户此前默认 san 通过记录分开保留。只读确认 perf_event_paranoid=4。本轮无新性能测量/全量 SIFT1M 重跑。阶段验证与局限见 `docs/validation/p1.md`，收尾文档已由用户提交并将 P1 合回 main，P2 分支已建立
 - 严格 Recall 的原有决定继续保持；构建并行不超过 8 个任务
+
+## P2 当前工作
+
+- P2 集成分支为 `feat/p2-hnsw`，当前位于 `feat/p2-hnsw`（图存储与随机层数均已由用户合回；用户2026-10-23明确选择直接在此分支推进相关功能，减少短分支），工作区起始干净
+- 已实现内部 `ann::detail::HNSWGraphStorage`（src/hnsw_graph.h/.cpp），保持设计中的 SoA：AlignedVector<float> 向量、L0 定长槽位、上层 L×M 按节点分配、uint32_t 上层偏移与 uint8_t 层元数据；用 kInvalidIdx 哨兵前缀表示实际邻居，不额外维护度数数组
+- 显式给层数 Append，入口只在新最高层出现时更新；SetNeighbors 只替换有向表，验证邻居存在/同层/无自环/重复/越界/超容量。图存储组件不负责搜索、随机层数、自动双向连接或剪枝，该存储阶段尚未公开可查询 HNSWIndex，当前集成状态见后续记录
+- 新增 tests/hnsw_graph_test.cpp 的 13 个用例，含二维十点图、扩容稳定 ID、层间隔离、上层偏移范围等；代理完成 GCC 11.4 rel/san 各 86 个测试，本轮 san 临时 detect_leaks=0、ASan/UBSan 无告警，用户随后已在普通终端通过默认 san 的全部114个测试，包含本块用例；P1 的默认 73 项通过不代替本块 86 项验证
+- 返回的只读 span 在扩容后可能失效，图边只存 ID/偏移；MemoryUsage 统计实际申请容量。Append 分配失败回滚逻辑状态，但可能保留容量并使旧视图失效；未注入真实 OOM 覆盖所有分配失败点
+- 取舍见 ADR-0007，学习与面试要点见 docs/learn/hnsw-graph-storage.md。该块后续为随机层数（状态见下条），再按设计推进搜索、基础插入、启发式剪枝；尚无 HNSW Recall/QPS 结论
+
+- 随机层数已实现为内部 HNSWLevelGenerator（src/hnsw_level.h/.cpp）：每实例 mt19937_64、默认种子42，M≥2，缓存1/ln(M)，按 floor(-ln(U)/ln(M)) 生成 uint8_t 最高层。高52位中点映射保证0<U<1，极值纯转换饱和到255；不宣称跨libm绝对一致或全图复现
+- 新增10个随机层数测试：边界、同/异种子、状态独立、M=2/4/16/32各百万样本尾分布/均值、5000节点与图存储集成。代理完成 rel/san 各96个测试，本轮san临时detect_leaks=0、ASan/UBSan无告警，用户随后已在普通终端通过默认 san 的全部114个测试，包含此前图存储和随机层数用例。学习笔记 docs/learn/hnsw-random-level.md，取舍 ADR-0008
+- 随机层数之后接入搜索原语（见下条）；当前无自动插入、选邻或HNSW Recall/QPS数据。分布公式：P(L≥l)=M^(-l)，E[L]=1/(M−1)；1/ln(M)是缩放因子而非每层晋升概率
+
+- 搜索原语已实现：src/hnsw_search.h/.cpp 内部 HNSWGreedyDescend、HNSWSearchLayer、HNSWSearchWorkspace。只读图，调用方预备并独占工作区；候选最小堆、结果最大堆、字节访问表去重；每节点至多入候选一次，提前预留N个候选及min(N,ef)结果槽位，搜索不扩容，每次清零N字节标记。输出最多ef个，距离/ID排序，可达节点不足时可更少；不改变P0严格Recall
+- 新增18个搜索测试，代理完成GCC11.4 rel/san各114个通过（本轮detect_leaks=0，ASan/UBSan无告警，用户随后已报告普通终端默认 san 的114个测试全部通过）。覆盖double参考、层隔离、ef桥接、环去重、断图、平局、非法参数、工作区复用/隔离、图只读、非有限距离和异常后复用；尚无真实并发/TSan或全局分配器拦截验证
+- 取舍见ADR-0009，讲解 docs/learn/hnsw-layer-search.md；工作区O(N)存储/清零有成本，代际标记等优化留待测量。公开Index签名未改，完整HNSWIndex工作区接入留到索引集成阶段。该搜索阶段尚无HNSW Recall/QPS测量；后续集成状态见下条
+
+### 2026-10-23 基础索引集成与接续点
+
+- 已在当前 `feat/p2-hnsw` 实现公开 `include/ann/hnsw.h`、`src/hnsw.cpp`，组合图存储、随机层数和搜索原语；新增 `tests/hnsw_test.cpp` 的13个测试。用户已分三次提交：e17fb6a 实现与测试、27bde47 评测入口、52abb07 文档；Git 写操作仍由用户执行。
+- Add 采用最近 M 连接及反向最近邻裁剪（L0 容量 Mmax0，上层 M），尚无多样性启发式，不保证所有边互反或全图连通。每点规划全部改边后再 Append/提交；当前点规划失败恢复 RNG，已完成批量前缀保留。BuildContext/BuildArena 在一批 Add 内复用，批次结束释放；未注入所有 OOM 点。
+- 用户明确确认：先用函数内局部工作区跑通标准 Search 基线，不新增公开工作区接口。Search 保持 const 且不修改成员，每次有分配和 O(N) 访问表初始化成本，不能称为零分配。SetEfSearch 原子更新，Params 返回构造快照；Add 不可与查询/统计并发。
+- 代理完成 GCC11.4 rel/san 各127个测试；本轮 san 使用 detect_leaks=0，无 ASan/UBSan 告警。用户随后已报告普通终端默认 san 的127项全部通过（5.78秒）；这是用户报告，代理未另行复核该次完整日志。小数据 L2/负内积都与独立 Flat 比较。
+- ann_bench 新增 --index hnsw、--m、--ef-construction、--ef-search，默认仍 Flat；HNSW 合成数据使用独立 Flat 参考，严格 ID Recall 不变；--data 官方 SIFT 答案只允许 L2。
+- 小规模基线原始目录 `data/p2-results/nearest-m-final-us017dob`；完整参数、环境和结果见 `bench/hnsw.md`。该合成5000×16/100查询基线不是全量SIFT1M验收，无P2最终达标结论。MemoryUsage 排除局部构建/查询工作区，不是峰值RSS。
+- 取舍 ADR-0010，学习及面试表 `docs/learn/hnsw-baseline-index.md`。基础索引已提交，后续先完成较大数据最近M基线，再推进启发式剪枝。未做全量 SIFT1M、Faiss 对照、真实并发/TSan；不要重复排查 P0 已解释的平局差异。
+
+### 2026-10-23 最近 M 真实数据子集基线
+
+- 已在干净提交52abb07上顺序完成 HNSW/Flat 的 SIFT前100000条、128维、10000查询对照，L2、k10；因截断库，参考答案由该子集上的 Flat 重算，严格ID定义不变。HNSW M16/Mmax0=32、efC200/efS64、seed42。完整结果与环境见 bench/hnsw.md，原始目录 data/p2-results/nearest-m-sift100k-a1nvea4c。
+- 环境为 i7-14650HX（16核/24逻辑CPU）、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程固定CPU0、powersave、允许Turbo、预热1轮/正式3轮；开始/完成后均读到接电，电源模式与实际频率未确认。结果为子集基线，不是全量SIFT1M或P2最终验收；核心代码本轮未改，不重复构建/测试。
+- 下一块：按已有设计接入多样性启发式剪枝并补针对性测试，保留当前最近M版本作为同轮对照；尚未进行全量SIFT1M、Faiss或真实并发验证。docs/design和docs/decisions暂保留，用户希望收尾时评估整理后删除，当前未删除。
+
+### 2026-10-23 多样性选邻（已提交）
+
+- 当前仍在 feat/p2-hnsw，新增私有src/hnsw_neighbors.h与tests/hnsw_neighbors_test.cpp；HNSWSelectNeighbors用于新点选邻和反向超限裁剪，公开接口/SoA布局不变。候选按中心距离/ID排序且唯一，超容量时若到某个已选邻居距离严格小于到中心距离则拒绝；等距本身不拒绝。候选未超容量保留全部，不扩展/回填，允许输出少于M，不保证双向/全局连通；负内积不宣称度量几何保证。
+- 两个独立输出缓冲放在批量BuildContext中；距离回调解析尚未Append的新点输入。仍先规划全部改边再Append/提交，Search未加共享状态；用户已提交ad30a18实现/测试和2afb07f验证文档，Git写操作仍由用户执行。
+- 新增10项测试，代理完成GCC11.4 rel/san各137项通过，san临时detect_leaks=0，核对完整日志无ASan/UBSan告警。用户随后报告普通终端默认san的137项全部通过（4.33秒），代理未另行复核该次完整日志。覆盖手算方向、输出不足容量、严格平局、全部已选点判断、非有限距离、负内积、待追加点与小M线图导航；未做真实OOM/并发验证。
+- SIFT前100000条/128维/10000查询、L2、k10、M16/Mmax0=32、efC200/efS64、seed42同轮比较完成；严格参考由截断库Flat重算。原始目录data/p2-results/heuristic-compare-ol50x8nm保存旧/新静态链接二进制、摘要、命令、源码和环境快照。环境i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程CPU0、powersave、允许Turbo、接电，warmup1/runs3；实际频率/温度/电源模式未确认。完整数值与局限见bench/hnsw.md；不与历史跨轮耗时直接相除，不宣称百万库或P2最终验收达成。
+- 取舍ADR-0011，手算与面试表docs/learn/hnsw-neighbor-selection.md。剪枝块已提交，后续扫描及Faiss同轮对照已完成，见后续记录；局部查询分配成本仍保留，未经批准不新增公开工作区接口。
+
+### 2026-10-23 完整SIFT1M与efSearch曲线（已提交）
+
+- 已扩展bench/bench_main.cpp，--ef-search-list仅适用HNSW且与--ef-search互斥；严格正整数列表、保留顺序/重复，只建图一次，各ef独立warmup/计时/召回，--csv逐行刷新并记录请求/实际max(ef,k)值。新增stderr阶段信息，单值入口仍保留。未改核心索引接口、算法或局部查询工作区。
+- tests/bench_cli_test.cmake新增1项CTest集成检查，无额外Python测试依赖；GCC11.4 rel/san各138项通过（137个GoogleTest+1个CLI），本轮san使用detect_leaks=0，完整日志无ASan/UBSan告警。用户随后报告普通终端默认san的138项全部通过（4.52秒），代理未另行复核该次完整日志。
+- 全量1000000×128、10000查询、L2、k10、M16/Mmax0=32、efC200、seed42，efS16/32/64/128/256同图扫描已完成；官方groundtruth严格ID比较，不截断、不改平局口径。原始目录data/p2-results/sift1m-ef-sweep-1zq_3h4q，基于2afb07f及本轮bench修改，源码/二进制摘要、命令、逐阶段环境均保存。
+- 环境i7-14650HX（16核/24逻辑CPU）、Ubuntu22.04/GCC11.4/RelWithDebInfo/AVX2Four，单线程CPU0、powersave、允许Turbo、接电，每ef预热1/正式3轮，频率/温度/电源模式未确认。曲线与指标见bench/hnsw.md；默认ef64的Recall/P99、构建耗时和索引容量达到相应目标，该扫描阶段当时尚未验证Faiss相对吞吐，后续结果见下节。内存统计区分索引申请容量与进程峰值RSS。
+- 此前保存的汇总bench/results/p2-sift1m-ef-search-20261023.csv及SVG后续按用户决定仅在本地保留，绘图脚本bench/plot_hnsw_sweep.py仅可选依赖matplotlib；C++构建不依赖它。阶段范围docs/validation/p2.md，学习/面试表docs/learn/hnsw-ef-search-sweep.md。
+- 当前本轮改动未提交，Git写操作仍由用户执行。下一步用户提交评测入口/结果，再准备同条件Python Faiss对照；不静默新增公开工作区接口，不因HNSW达标抹去P0原验收未达成记录。
+
+### 2026-10-23 Python Faiss对照与收尾（当前交付）
+
+- 用户已提交扫描入口/绘图/全量曲线，当前HEAD57a2591。用户选择venv，已在普通终端安装faiss-cpu1.12.0、numpy2.2.6、packaging25.0；解释器build-deps/faiss-venv/bin/python，实际后端AVX2。此前代理沙盒下载失败并发起过外部权限请求，用户中止后要求先商量；此后不再尝试下载或越过沙盒，依赖由用户完成。
+- venv的include-system-site-packages=false，但PYTHONPATH含ROS Humble导致普通pip check看到launch-ros缺PyYAML；已只读确认包实际在venv，并用-I验证无损坏依赖/ROS不可见。后续使用解释器明确路径与-I，不依赖用户交互终端或改全局环境。
+- 新增bench/faiss_bench.py和faiss-requirements.txt，tests/faiss_bench_test.py的8项可选Python检查已通过。Faiss不进入C++链接或默认CTest依赖，现有138项Cpp/CLI记录继续适用。公开search逐条查询，预分配D/I，Python包装成本包含且不扣除；M16/Mmax0=32、efC200、seed42、OMP1，Faiss默认bounded queue/relative distance策略显式保留。相同seed不保证与自研相同图。
+- 全量同轮对照已在data/p2-results/faiss-compare-23lk4yyv成功完成（完整1M×128、10000查询、严格官方ID，单线程CPU0、warmup1/runs3，依次自研与Faiss；两进程均退出0）。环境i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，自研AVX2Four、Faiss AVX2；阶段快照powersave、允许Turbo、接电，实际频率/温度/电源模式与背景负载未完整采样。命令、源码/二进制/数据SHA256、环境及CSV保存；未做顺序随机化/置信区间。
+- Faiss memory_bytes明确标记logical_payload_bytes，统计可见数组有效字节，不能直接与自研MemoryUsage申请容量计算优劣。协议bench/faiss.md，学习/面试表docs/learn/faiss-baseline.md；结果已完成；默认ef64自研/Faiss的严格Recall与QPS同时报告，不能把同ef吞吐比当作同准确率的纯C++内核比较。仓库汇总见bench/faiss.md，完整CSV/SVG仅在本地bench/results及原始目录保留。
+
+- 本轮默认ef64自研严格Recall达到0.95、相对本协议Python Faiss吞吐达到60%，五个ef点吞吐比均超过60%；自研P99、构建时间与索引容量也达到既有目标。P2主要本机验收已通过，不据此宣称原生Faiss同准确率比值、查询零分配或已验证真实并发/OOM。
+- 收尾安全构建及rel/san各138项通过，san临时detect_leaks=0，核对完整日志无ASan/UBSan告警；用户此前默认san138项4.52秒记录保留。本轮未改Cpp实现，无需因Python工具重复请求用户跑默认san；Python8项检查通过，绘图完成并验证拒绝批量结果混入。
+- 本轮新增Faiss脚本/固定依赖清单/可选测试、对照CSV及SVG，扩展绘图--compare并忽略Python字节码缓存；学习与面试表docs/learn/faiss-baseline.md。当前改动未提交，Git写操作仍由用户执行；下一步用户提交本轮工具/记录、将feat/p2-hnsw合回main，再决定P3开发分支与实现计划。未经批准不新增公开工作区接口，不擦除P0原验收未达成记录。
+
+### 结果文件管理（用户已确认）
+
+- 前两个Faiss工具/绘图提交已由用户完成。第三次提交只包含文档汇总、环境、复现命令和忽略规则，不添加运行生成的CSV/SVG。
+- .gitignore已忽略/bench/results/；data/p2-results/原本已忽略。此前入库的两份p2-sift1m-ef-search-20261023.csv/svg由用户执行git rm --cached取消跟踪，保留本地文件，不重写旧提交。文档已移除对本地生成文件的图片/下载链接，使用生成命令代替。
+- 仓库继续保存作者测量汇总，但使用者需自行运行并记录自己的环境；这不改变P2验收结果或严格Recall口径。
 
 ## 工作方式约定
 

@@ -479,3 +479,13 @@ RelWithDebInfo；单线程未显式绑核，L2²、k=10，预热 1 轮、正式�
 计数、采样、混合核心选择及环境记录见 [perf 说明](perf.md)。
 当前 perf 已安装，但初始 task-clock 探针被拒绝；用户处理后普通终端硬件探针成功，代理环境仍受限，固定 P 核的 Flat 首轮 IPC≈1.36，缓存事件比值58.73%、主要 cycles 样本归属 L2SqrAVX2Four；完整环境与局限见 perf 说明；
 已有初步运行时证据，不把高缓存未命中比例直接解释为带宽饱和；Scalar/AVX2 的固定 P 核 IPC 对照也已完成，CPU mean、IPC 和环境见 perf 说明。
+
+## 10. HNSW 端到端基线
+
+运行入口、独立 Flat 参考、环境与结果见 [HNSW 评测说明](hnsw.md)。当前已接入多样性剪枝并记录最近 M 同轮对照；全量 SIFT1M 验收待完成。
+
+同图efSearch扫描、CSV导出、完整SIFT1M曲线与验收范围现已记录在 [HNSW评测说明](hnsw.md)。可选绘图脚本为 plot_hnsw_sweep.py，不增加C++构建依赖。
+
+## 11. Python Faiss 对照
+
+安装隔离、逐条查询计时、完整同轮结果和口径限制见 [Faiss基线](faiss.md)。仅作为Python侧对照，不链接进C++，可选测试为 tests/faiss_bench_test.py。

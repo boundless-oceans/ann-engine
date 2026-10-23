@@ -16,13 +16,16 @@ add_library(ann_core
     # ---- 基础层 ----
     distance.cpp        # 标量距离函数与当前派发
     distance_avx2.cpp   # AVX2 + FMA 单/四累加器，函数级指令集隔离
-    memory_pool.cpp     # 对齐分配；构建期内存池后续单独实现
+    memory_pool.cpp     # 对齐分配与构建期内存池
 
     # ---- 索引层 ----
     flat.cpp            # FlatIndex：暴力检索 / ground-truth 生成器
+    hnsw_graph.cpp      # HNSW：定长邻居槽位与按节点层数分配的上层池
+    hnsw_level.cpp      # HNSW：固定种子的随机层数生成
+    hnsw_search.cpp     # HNSW：只读贪心下降与单层 ef 搜索
+    hnsw.cpp            # HNSW：多样性选邻、反向裁剪与完整索引查询
 
     # ---- 尚未实现的模块：实现时取消注释，并加入上面的源文件列表 ----
-    # hnsw.cpp          分层图索引（HNSW）
     # ivf.cpp           倒排索引（IVF）
     # quantizer.cpp     标量量化 / 乘积量化（SQ / PQ）
     # storage.cpp       索引序列化与加载
