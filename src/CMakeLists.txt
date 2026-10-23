@@ -17,6 +17,7 @@ add_library(ann_core
     distance.cpp        # 标量距离函数与当前派发
     distance_avx2.cpp   # AVX2 + FMA 单/四累加器，函数级指令集隔离
     memory_pool.cpp     # 对齐分配与构建期内存池
+    kmeans.cpp          # IVF/PQ 共用的 L2 聚类训练器
 
     # ---- 索引层 ----
     flat.cpp            # FlatIndex：暴力检索 / ground-truth 生成器
