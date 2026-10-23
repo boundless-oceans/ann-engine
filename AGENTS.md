@@ -9,7 +9,7 @@
 
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
-> **当前开始 P2，P1 已完成集成验证并合回 main；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
+> **P2 已完成主要本机验收，待用户提交收尾并合回 main；P1 已合回 main，保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
@@ -129,16 +129,34 @@
 - 两个独立输出缓冲放在批量BuildContext中；距离回调解析尚未Append的新点输入。仍先规划全部改边再Append/提交，Search未加共享状态；用户已提交ad30a18实现/测试和2afb07f验证文档，Git写操作仍由用户执行。
 - 新增10项测试，代理完成GCC11.4 rel/san各137项通过，san临时detect_leaks=0，核对完整日志无ASan/UBSan告警。用户随后报告普通终端默认san的137项全部通过（4.33秒），代理未另行复核该次完整日志。覆盖手算方向、输出不足容量、严格平局、全部已选点判断、非有限距离、负内积、待追加点与小M线图导航；未做真实OOM/并发验证。
 - SIFT前100000条/128维/10000查询、L2、k10、M16/Mmax0=32、efC200/efS64、seed42同轮比较完成；严格参考由截断库Flat重算。原始目录data/p2-results/heuristic-compare-ol50x8nm保存旧/新静态链接二进制、摘要、命令、源码和环境快照。环境i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程CPU0、powersave、允许Turbo、接电，warmup1/runs3；实际频率/温度/电源模式未确认。完整数值与局限见bench/hnsw.md；不与历史跨轮耗时直接相除，不宣称百万库或P2最终验收达成。
-- 取舍ADR-0011，手算与面试表docs/learn/hnsw-neighbor-selection.md。剪枝块已提交，后续efSearch曲线与全量SIFT1M验证进行中；局部查询分配成本仍保留，未经批准不新增公开工作区接口。
+- 取舍ADR-0011，手算与面试表docs/learn/hnsw-neighbor-selection.md。剪枝块已提交，后续扫描及Faiss同轮对照已完成，见后续记录；局部查询分配成本仍保留，未经批准不新增公开工作区接口。
 
-### 2026-10-23 完整SIFT1M与efSearch曲线（当前交付）
+### 2026-10-23 完整SIFT1M与efSearch曲线（已提交）
 
 - 已扩展bench/bench_main.cpp，--ef-search-list仅适用HNSW且与--ef-search互斥；严格正整数列表、保留顺序/重复，只建图一次，各ef独立warmup/计时/召回，--csv逐行刷新并记录请求/实际max(ef,k)值。新增stderr阶段信息，单值入口仍保留。未改核心索引接口、算法或局部查询工作区。
 - tests/bench_cli_test.cmake新增1项CTest集成检查，无额外Python测试依赖；GCC11.4 rel/san各138项通过（137个GoogleTest+1个CLI），本轮san使用detect_leaks=0，完整日志无ASan/UBSan告警。用户随后报告普通终端默认san的138项全部通过（4.52秒），代理未另行复核该次完整日志。
 - 全量1000000×128、10000查询、L2、k10、M16/Mmax0=32、efC200、seed42，efS16/32/64/128/256同图扫描已完成；官方groundtruth严格ID比较，不截断、不改平局口径。原始目录data/p2-results/sift1m-ef-sweep-1zq_3h4q，基于2afb07f及本轮bench修改，源码/二进制摘要、命令、逐阶段环境均保存。
-- 环境i7-14650HX（16核/24逻辑CPU）、Ubuntu22.04/GCC11.4/RelWithDebInfo/AVX2Four，单线程CPU0、powersave、允许Turbo、接电，每ef预热1/正式3轮，频率/温度/电源模式未确认。曲线与指标见bench/hnsw.md；默认ef64的Recall/P99、构建耗时和索引容量达到相应目标，但Faiss相对吞吐未验证，不宣称P2整体完成。内存统计区分索引申请容量与进程峰值RSS。
-- 可入库汇总bench/results/p2-sift1m-ef-search-20261023.csv及SVG，绘图脚本bench/plot_hnsw_sweep.py仅可选依赖matplotlib；C++构建不依赖它。阶段范围docs/validation/p2.md，学习/面试表docs/learn/hnsw-ef-search-sweep.md。
+- 环境i7-14650HX（16核/24逻辑CPU）、Ubuntu22.04/GCC11.4/RelWithDebInfo/AVX2Four，单线程CPU0、powersave、允许Turbo、接电，每ef预热1/正式3轮，频率/温度/电源模式未确认。曲线与指标见bench/hnsw.md；默认ef64的Recall/P99、构建耗时和索引容量达到相应目标，该扫描阶段当时尚未验证Faiss相对吞吐，后续结果见下节。内存统计区分索引申请容量与进程峰值RSS。
+- 此前保存的汇总bench/results/p2-sift1m-ef-search-20261023.csv及SVG后续按用户决定仅在本地保留，绘图脚本bench/plot_hnsw_sweep.py仅可选依赖matplotlib；C++构建不依赖它。阶段范围docs/validation/p2.md，学习/面试表docs/learn/hnsw-ef-search-sweep.md。
 - 当前本轮改动未提交，Git写操作仍由用户执行。下一步用户提交评测入口/结果，再准备同条件Python Faiss对照；不静默新增公开工作区接口，不因HNSW达标抹去P0原验收未达成记录。
+
+### 2026-10-23 Python Faiss对照与收尾（当前交付）
+
+- 用户已提交扫描入口/绘图/全量曲线，当前HEAD57a2591。用户选择venv，已在普通终端安装faiss-cpu1.12.0、numpy2.2.6、packaging25.0；解释器build-deps/faiss-venv/bin/python，实际后端AVX2。此前代理沙盒下载失败并发起过外部权限请求，用户中止后要求先商量；此后不再尝试下载或越过沙盒，依赖由用户完成。
+- venv的include-system-site-packages=false，但PYTHONPATH含ROS Humble导致普通pip check看到launch-ros缺PyYAML；已只读确认包实际在venv，并用-I验证无损坏依赖/ROS不可见。后续使用解释器明确路径与-I，不依赖用户交互终端或改全局环境。
+- 新增bench/faiss_bench.py和faiss-requirements.txt，tests/faiss_bench_test.py的8项可选Python检查已通过。Faiss不进入C++链接或默认CTest依赖，现有138项Cpp/CLI记录继续适用。公开search逐条查询，预分配D/I，Python包装成本包含且不扣除；M16/Mmax0=32、efC200、seed42、OMP1，Faiss默认bounded queue/relative distance策略显式保留。相同seed不保证与自研相同图。
+- 全量同轮对照已在data/p2-results/faiss-compare-23lk4yyv成功完成（完整1M×128、10000查询、严格官方ID，单线程CPU0、warmup1/runs3，依次自研与Faiss；两进程均退出0）。环境i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，自研AVX2Four、Faiss AVX2；阶段快照powersave、允许Turbo、接电，实际频率/温度/电源模式与背景负载未完整采样。命令、源码/二进制/数据SHA256、环境及CSV保存；未做顺序随机化/置信区间。
+- Faiss memory_bytes明确标记logical_payload_bytes，统计可见数组有效字节，不能直接与自研MemoryUsage申请容量计算优劣。协议bench/faiss.md，学习/面试表docs/learn/faiss-baseline.md；结果已完成；默认ef64自研/Faiss的严格Recall与QPS同时报告，不能把同ef吞吐比当作同准确率的纯C++内核比较。仓库汇总见bench/faiss.md，完整CSV/SVG仅在本地bench/results及原始目录保留。
+
+- 本轮默认ef64自研严格Recall达到0.95、相对本协议Python Faiss吞吐达到60%，五个ef点吞吐比均超过60%；自研P99、构建时间与索引容量也达到既有目标。P2主要本机验收已通过，不据此宣称原生Faiss同准确率比值、查询零分配或已验证真实并发/OOM。
+- 收尾安全构建及rel/san各138项通过，san临时detect_leaks=0，核对完整日志无ASan/UBSan告警；用户此前默认san138项4.52秒记录保留。本轮未改Cpp实现，无需因Python工具重复请求用户跑默认san；Python8项检查通过，绘图完成并验证拒绝批量结果混入。
+- 本轮新增Faiss脚本/固定依赖清单/可选测试、对照CSV及SVG，扩展绘图--compare并忽略Python字节码缓存；学习与面试表docs/learn/faiss-baseline.md。当前改动未提交，Git写操作仍由用户执行；下一步用户提交本轮工具/记录、将feat/p2-hnsw合回main，再决定P3开发分支与实现计划。未经批准不新增公开工作区接口，不擦除P0原验收未达成记录。
+
+### 结果文件管理（用户已确认）
+
+- 前两个Faiss工具/绘图提交已由用户完成。第三次提交只包含文档汇总、环境、复现命令和忽略规则，不添加运行生成的CSV/SVG。
+- .gitignore已忽略/bench/results/；data/p2-results/原本已忽略。此前入库的两份p2-sift1m-ef-search-20261023.csv/svg由用户执行git rm --cached取消跟踪，保留本地文件，不重写旧提交。文档已移除对本地生成文件的图片/下载链接，使用生成命令代替。
+- 仓库继续保存作者测量汇总，但使用者需自行运行并记录自己的环境；这不改变P2验收结果或严格Recall口径。
 
 ## 工作方式约定
 
