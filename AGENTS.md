@@ -94,7 +94,7 @@
 
 - P2 集成分支为 `feat/p2-hnsw`，当前位于 `feat/p2-hnsw`（图存储与随机层数均已由用户合回；用户2026-10-23明确选择直接在此分支推进相关功能，减少短分支），工作区起始干净
 - 已实现内部 `ann::detail::HNSWGraphStorage`（src/hnsw_graph.h/.cpp），保持设计中的 SoA：AlignedVector<float> 向量、L0 定长槽位、上层 L×M 按节点分配、uint32_t 上层偏移与 uint8_t 层元数据；用 kInvalidIdx 哨兵前缀表示实际邻居，不额外维护度数数组
-- 显式给层数 Append，入口只在新最高层出现时更新；SetNeighbors 只替换有向表，验证邻居存在/同层/无自环/重复/越界/超容量。图存储组件不负责搜索、随机层数、自动双向连接或剪枝，也未公开可查询 HNSWIndex
+- 显式给层数 Append，入口只在新最高层出现时更新；SetNeighbors 只替换有向表，验证邻居存在/同层/无自环/重复/越界/超容量。图存储组件不负责搜索、随机层数、自动双向连接或剪枝，该存储阶段尚未公开可查询 HNSWIndex，当前集成状态见后续记录
 - 新增 tests/hnsw_graph_test.cpp 的 13 个用例，含二维十点图、扩容稳定 ID、层间隔离、上层偏移范围等；代理完成 GCC 11.4 rel/san 各 86 个测试，本轮 san 临时 detect_leaks=0、ASan/UBSan 无告警，用户随后已在普通终端通过默认 san 的全部114个测试，包含本块用例；P1 的默认 73 项通过不代替本块 86 项验证
 - 返回的只读 span 在扩容后可能失效，图边只存 ID/偏移；MemoryUsage 统计实际申请容量。Append 分配失败回滚逻辑状态，但可能保留容量并使旧视图失效；未注入真实 OOM 覆盖所有分配失败点
 - 取舍见 ADR-0007，学习与面试要点见 docs/learn/hnsw-graph-storage.md。该块后续为随机层数（状态见下条），再按设计推进搜索、基础插入、启发式剪枝；尚无 HNSW Recall/QPS 结论
@@ -105,7 +105,17 @@
 
 - 搜索原语已实现：src/hnsw_search.h/.cpp 内部 HNSWGreedyDescend、HNSWSearchLayer、HNSWSearchWorkspace。只读图，调用方预备并独占工作区；候选最小堆、结果最大堆、字节访问表去重；每节点至多入候选一次，提前预留N个候选及min(N,ef)结果槽位，搜索不扩容，每次清零N字节标记。输出最多ef个，距离/ID排序，可达节点不足时可更少；不改变P0严格Recall
 - 新增18个搜索测试，代理完成GCC11.4 rel/san各114个通过（本轮detect_leaks=0，ASan/UBSan无告警，用户随后已报告普通终端默认 san 的114个测试全部通过）。覆盖double参考、层隔离、ef桥接、环去重、断图、平局、非法参数、工作区复用/隔离、图只读、非有限距离和异常后复用；尚无真实并发/TSan或全局分配器拦截验证
-- 取舍见ADR-0009，讲解 docs/learn/hnsw-layer-search.md；工作区O(N)存储/清零有成本，代际标记等优化留待测量。公开Index签名未改，完整HNSWIndex工作区接入留到索引集成阶段。下一块基础插入和完整查询，目前无HNSW Recall/QPS测量
+- 取舍见ADR-0009，讲解 docs/learn/hnsw-layer-search.md；工作区O(N)存储/清零有成本，代际标记等优化留待测量。公开Index签名未改，完整HNSWIndex工作区接入留到索引集成阶段。该搜索阶段尚无HNSW Recall/QPS测量；后续集成状态见下条
+
+### 2026-10-23 基础索引集成与接续点
+
+- 已在当前 `feat/p2-hnsw` 实现公开 `include/ann/hnsw.h`、`src/hnsw.cpp`，组合图存储、随机层数和搜索原语；新增 `tests/hnsw_test.cpp` 的13个测试。当前改动尚未由用户提交，Git 写操作仍由用户执行。
+- Add 采用最近 M 连接及反向最近邻裁剪（L0 容量 Mmax0，上层 M），尚无多样性启发式，不保证所有边互反或全图连通。每点规划全部改边后再 Append/提交；当前点规划失败恢复 RNG，已完成批量前缀保留。BuildContext/BuildArena 在一批 Add 内复用，批次结束释放；未注入所有 OOM 点。
+- 用户明确确认：先用函数内局部工作区跑通标准 Search 基线，不新增公开工作区接口。Search 保持 const 且不修改成员，每次有分配和 O(N) 访问表初始化成本，不能称为零分配。SetEfSearch 原子更新，Params 返回构造快照；Add 不可与查询/统计并发。
+- 代理完成 GCC11.4 rel/san 各127个测试；本轮 san 使用 detect_leaks=0，无 ASan/UBSan 告警。用户随后已报告普通终端默认 san 的127项全部通过（5.78秒）；这是用户报告，代理未另行复核该次完整日志。小数据 L2/负内积都与独立 Flat 比较。
+- ann_bench 新增 --index hnsw、--m、--ef-construction、--ef-search，默认仍 Flat；HNSW 合成数据使用独立 Flat 参考，严格 ID Recall 不变；--data 官方 SIFT 答案只允许 L2。
+- 小规模基线原始目录 `data/p2-results/nearest-m-final-us017dob`；完整参数、环境和结果见 `bench/hnsw.md`。该合成5000×16/100查询基线不是全量SIFT1M验收，无P2最终达标结论。MemoryUsage 排除局部构建/查询工作区，不是峰值RSS。
+- 取舍 ADR-0010，学习及面试表 `docs/learn/hnsw-baseline-index.md`。下一步：用户审阅/提交当前块，再记录较大数据最近M基线和推进启发式剪枝。未做全量 SIFT1M、Faiss 对照、真实并发/TSan；不要重复排查 P0 已解释的平局差异。
 
 ## 工作方式约定
 
