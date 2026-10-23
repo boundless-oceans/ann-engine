@@ -9,7 +9,7 @@
 
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
-> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 分支推进 KMeans；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
+> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 功能分支推进未量化 IVF；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
@@ -231,3 +231,14 @@
 - Train 成功才提交输出、统计及 RNG；同实例连续训练延续 RNG，同环境同种子调用序列复现，不保证跨标准库/libm 逐位一致。Assign 为 const，无成员写入；Train 不与同实例其他操作并发。输入需有限且 n>=k；不新增 metric 参数，不把 L2 聚类描述为 IP/余弦专用训练。
 - 第一块仅聚类训练器，尚无 IVF/SQ/PQ、SIMD 训练优化、真实大数据训练或 P3 性能验收；复杂度 O(iters×n×k×dim)，空间 O(n+k×dim)。取舍 ADR-0012，学习与面试表 docs/learn/kmeans.md，验证记录 docs/validation/p3.md。
 - 代理完成 GCC11.4 rel/san 各150项CTest（新增12项KMeans）；san临时detect_leaks=0，完整日志无ASan/UBSan告警，未验证泄漏。clang-format、diff检查通过；clang-tidy补齐GCC标准库路径后退出0，仍有风格建议。本块尚未提交，用户此前默认san138项不替代本块新增测试。
+
+
+### P3 未量化 IVF（2026-10-23）
+
+- 用户已提交 KMeans 实现63a9a52/文档49f661f，并创建 feat/p3-ivf-flat。用户要求较大且需要多次提交的功能使用独立分支，功能完成后合回 P3 集成分支。Git 写操作仍由用户执行。
+- 用户已明确确认首版仅 L2，内积路由后续讨论；沿用既有静态设计：Add 累积、Build 成功后拒绝 Add，重复 Build 无操作；n<nlist 时 Build 报错，可追加后重试。Build 先局部训练/分配/生成 CSR，成功再 swap 提交，未注入真实 OOM。
+- 新增 include/ann/ivf.h、src/ivf.cpp、私有 ivf_lists.h/.cpp。KMeans 全量训练、CSR 原始 ID 列表，距离候选使用既有 float 运行时派发；Search const 无成员写入、局部缓冲有分配，nprobe 原子请求值、0->1、查询时截断到 nlist。全探测跳过中心排序扫描全库；有限 float 距离溢出则报错，输出成功后才写。结果距离/ID排序、缺项填哨兵，不自动扩大 nprobe，不改变 P0 严格 Recall。
+- 沿用总设计的 unique_ptr<Quantizer> 构造签名，新增设计已有的纯抽象 quantizer.h；当前非空量化器报错，尚无 SQ/PQ/codes/residuals。MemoryUsage 统计对象及成员数组申请容量，排除局部工作区，不是 RSS。
+- 本轮先交付核心构建/查询，ann_bench 尚未支持 IVF，没有真实数据训练/性能/量化验收结论。取舍 ADR-0013，学习/面试表 docs/learn/ivf-flat.md；后续先提交核心与记录，再接入评测入口和 nprobe 对比。
+
+- IVF核心代理完成rel/san各171项CTest（新增CSR5+IVF16），san临时detect_leaks=0，完整日志无ASan/UBSan告警；clang-format/diff检查通过，clang-tidy补齐GCC标准库路径后退出0但保留风格建议。尚未运行普通终端默认san171项。当前实现/记录未提交，下一块评测入口仍在同一功能分支推进。
