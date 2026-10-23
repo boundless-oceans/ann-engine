@@ -80,3 +80,8 @@ target_link_libraries(ann_tests
 # -----------------------------------------------------------------------------
 include(GoogleTest)
 gtest_discover_tests(ann_tests)
+
+# 复用 CMake 执行 CLI 集成检查，无需额外 Python 依赖。
+add_test(NAME BenchCli.EfSearchSweep
+    COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/bench_cli_test.cmake)

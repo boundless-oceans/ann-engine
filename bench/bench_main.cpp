@@ -12,14 +12,19 @@
 // 注意：所有性能数字必须连同构建配置与硬件环境一起记录，
 // 否则数字之间没有可比性。构建配置由 CMake 的配置摘要给出。
 
+#include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "dataset.h"
@@ -36,16 +41,19 @@ namespace {
 struct Options {
     std::string index = "flat";
     ann::HNSWParams hnsw;
-    size_t n = 100000;        // 合成数据的 base 向量数
-    size_t nq = 1000;         // 查询数
-    size_t dim = 128;         // 维度
-    size_t k = 10;            // top-k
+    std::vector<size_t> ef_search_list;
+    bool ef_search_explicit = false;
+    std::string csv_path;
+    size_t n = 100000;  // 合成数据的 base 向量数
+    size_t nq = 1000;   // 查询数
+    size_t dim = 128;   // 维度
+    size_t k = 10;      // top-k
     ann::Metric metric = ann::Metric::L2;
-    std::string data_dir;     // 非空则从磁盘加载，忽略合成数据参数
-    size_t max_base = 0;      // 截断 base（调试用）
+    std::string data_dir;  // 非空则从磁盘加载，忽略合成数据参数
+    size_t max_base = 0;   // 截断 base（调试用）
     uint64_t seed = 42;
-    size_t warmup = 1;        // 预热轮数
-    size_t runs = 3;          // 正式测量轮数
+    size_t warmup = 1;  // 预热轮数
+    size_t runs = 3;    // 正式测量轮数
 };
 
 void PrintUsage() {
@@ -59,6 +67,8 @@ void PrintUsage() {
         "  --m <int>         HNSW M, Mmax0=2*M (default 16)\n"
         "  --ef-construction <int> HNSW build width (default 200)\n"
         "  --ef-search <int> HNSW search width (default 64)\n"
+        "  --ef-search-list <ints> HNSW sweep, e.g. 16,32,64,128; build once\n"
+        "  --csv <path>      export measurement rows as CSV\n"
         "  --n <int>         number of base vectors for synthetic data (default 100000)\n"
         "  --nq <int>        number of queries (default 1000)\n"
         "  --dim <int>       vector dimension (default 128)\n"
@@ -70,6 +80,27 @@ void PrintUsage() {
         "  --warmup <int>    warmup rounds, not measured (default 1)\n"
         "  --runs <int>      measured rounds (default 3)\n"
         "  -h, --help        show this message\n");
+}
+
+// 严格解析正整数列表；保留输入顺序与重复项，支持反向/重复测量观察顺序影响。
+bool ParseEfSearchList(std::string_view text, std::vector<size_t>* values) {
+    values->clear();
+    while (!text.empty()) {
+        const auto comma = text.find(',');
+        const auto token = text.substr(0, comma);
+        size_t value = 0;
+        const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+        if (token.empty() || parsed.ec != std::errc{} ||
+            parsed.ptr != token.data() + token.size() || value == 0) {
+            return false;
+        }
+        values->push_back(value);
+        if (comma == std::string_view::npos) {
+            return true;
+        }
+        text.remove_prefix(comma + 1);
+    }
+    return false;
 }
 
 // 返回 false 表示参数非法，应当终止。
@@ -107,25 +138,45 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
             if (v == nullptr)
                 return false;
             opt->hnsw.ef_search = static_cast<size_t>(std::strtoull(v, nullptr, 10));
+            opt->ef_search_explicit = true;
+        } else if (a == "--ef-search-list") {
+            const char* v = need_value("--ef-search-list");
+            if (v == nullptr)
+                return false;
+            if (!ParseEfSearchList(v, &opt->ef_search_list)) {
+                std::fprintf(stderr,
+                             "error: ef-search-list requires positive comma-separated integers\n");
+                return false;
+            }
+        } else if (a == "--csv") {
+            const char* v = need_value("--csv");
+            if (v == nullptr)
+                return false;
+            opt->csv_path = v;
         } else if (a == "--n") {
             const char* v = need_value("--n");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->n = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--nq") {
             const char* v = need_value("--nq");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->nq = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--dim") {
             const char* v = need_value("--dim");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->dim = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--k") {
             const char* v = need_value("--k");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->k = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--metric") {
             const char* v = need_value("--metric");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             if (std::strcmp(v, "l2") == 0) {
                 opt->metric = ann::Metric::L2;
             } else if (std::strcmp(v, "ip") == 0) {
@@ -136,23 +187,28 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
             }
         } else if (a == "--data") {
             const char* v = need_value("--data");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->data_dir = v;
         } else if (a == "--max-base") {
             const char* v = need_value("--max-base");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->max_base = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--seed") {
             const char* v = need_value("--seed");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->seed = std::strtoull(v, nullptr, 10);
         } else if (a == "--warmup") {
             const char* v = need_value("--warmup");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->warmup = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--runs") {
             const char* v = need_value("--runs");
-            if (v == nullptr) return false;
+            if (v == nullptr)
+                return false;
             opt->runs = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
@@ -167,6 +223,11 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
     }
     if (opt->index != "flat" && opt->index != "hnsw") {
         std::fprintf(stderr, "error: index must be flat or hnsw\n");
+        return false;
+    }
+    if (!opt->ef_search_list.empty() && (opt->index != "hnsw" || opt->ef_search_explicit)) {
+        std::fprintf(stderr,
+                     "error: ef-search-list requires hnsw and cannot combine with ef-search\n");
         return false;
     }
     if (opt->index == "hnsw" && (opt->hnsw.M < 2 || opt->hnsw.M > ann::kInvalidIdx / 2 ||
@@ -187,21 +248,18 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
 
 const char* MetricName(ann::Metric m) {
     switch (m) {
-        case ann::Metric::L2:           return "L2";
-        case ann::Metric::InnerProduct: return "InnerProduct";
-        case ann::Metric::Cosine:       return "Cosine";
+        case ann::Metric::L2:
+            return "L2";
+        case ann::Metric::InnerProduct:
+            return "InnerProduct";
+        case ann::Metric::Cosine:
+            return "Cosine";
     }
     return "Unknown";
 }
 
-// 用索引自身在给定数据上生成 ground truth。
-//
-// 合成数据没有官方答案，只能用精确索引自算。这条路径同时充当评测框架的自检：
-// 用同一份结果既当答案又当被测对象，recall 必然为 1.0，
-// 因此它只能验证指标链路是否打通，不能验证索引是否准确。
-// 真实准确性必须依靠加载官方 groundtruth（--data）。
-std::vector<int32_t> BuildGroundTruth(ann::Index* idx, const float* queries,
-                                      size_t nq, size_t k) {
+// 用精确 Flat 生成参考；被测对象也是 Flat 时仅作为链路自检。
+std::vector<int32_t> BuildGroundTruth(ann::Index* idx, const float* queries, size_t nq, size_t k) {
     std::vector<ann::dist_t> dists(nq * k);
     std::vector<ann::idx_t> ids(nq * k);
 
@@ -219,8 +277,12 @@ std::vector<int32_t> BuildGroundTruth(ann::Index* idx, const float* queries,
 //
 // 每条查询单独取时钟会带来数十纳秒开销。在当前毫秒级的查询耗时下可忽略，
 // 但若将来单次查询降到微秒级，应改为「另一轮只测整批」的方式。
-void RunRound(const ann::Index& idx, const float* queries, size_t nq, size_t k,
-              size_t dim, ann::bench::LatencyRecorder* latency,
+void RunRound(const ann::Index& idx,
+              const float* queries,
+              size_t nq,
+              size_t k,
+              size_t dim,
+              ann::bench::LatencyRecorder* latency,
               ann::bench::QpsTimer* timer) {
     std::vector<ann::dist_t> dists(k);
     std::vector<ann::idx_t> ids(k);
@@ -246,6 +308,17 @@ int RunBenchmark(int argc, char** argv) {
         return 1;
     }
 
+    std::ofstream csv;
+    if (!opt.csv_path.empty()) {
+        csv.exceptions(std::ios::failbit | std::ios::badbit);
+        csv.open(opt.csv_path);
+        csv << "index,metric,n,dim,nq,k,M,Mmax0,ef_construction,ef_search,effective_ef_search,"
+               "seed,warmup,runs,build_seconds,memory_bytes,recall,qps,mean_ms,p50_ms,p95_ms,p99_"
+               "ms,max_ms\n";
+        csv << std::fixed << std::setprecision(9);
+        csv.flush();
+    }
+    std::fprintf(stderr, "[bench] Loading dataset\n");
     // ---------------- 准备数据 ----------------
     ann::bench::Dataset ds;
     bool synthetic = opt.data_dir.empty();
@@ -255,8 +328,7 @@ int RunBenchmark(int argc, char** argv) {
     } else {
         ds = ann::bench::LoadSIFT(opt.data_dir, opt.max_base);
         if (ds.n == 0) {
-            std::fprintf(stderr, "error: failed to load dataset from '%s'\n",
-                         opt.data_dir.c_str());
+            std::fprintf(stderr, "error: failed to load dataset from '%s'\n", opt.data_dir.c_str());
             return 1;
         }
     }
@@ -270,17 +342,19 @@ int RunBenchmark(int argc, char** argv) {
     }
     ann::Index& index = *owned_index;
 
+    std::fprintf(stderr, "[bench] Building %s: %zu vectors\n", index.Name(), ds.n);
     const auto build_t0 = std::chrono::steady_clock::now();
     index.Add(ds.n, ds.base.data());
     index.Build();
     const auto build_t1 = std::chrono::steady_clock::now();
-    const double build_seconds =
-        std::chrono::duration<double>(build_t1 - build_t0).count();
+    const double build_seconds = std::chrono::duration<double>(build_t1 - build_t0).count();
 
+    std::fprintf(stderr, "[bench] Build completed in %.3f s\n", build_seconds);
     // ---------------- ground truth ----------------
     std::vector<int32_t> gt = ds.groundtruth;
     size_t gt_dim = ds.gt_dim;
     if (gt.empty()) {
+        std::fprintf(stderr, "[bench] Computing exact Flat reference\n");
         if (opt.index == "hnsw") {
             // ANN 不得把自身输出当作答案；独立 Flat 枚举产生严格 ID 参考。
             ann::FlatIndex reference(ds.dim, opt.metric);
@@ -292,76 +366,105 @@ int RunBenchmark(int argc, char** argv) {
         gt_dim = opt.k;
     }
 
-    // ---------------- 预热与测量 ----------------
-    ann::bench::LatencyRecorder latency;
-    ann::bench::QpsTimer timer;
+    const std::vector<size_t> ef_values =
+        opt.ef_search_list.empty() ? std::vector<size_t>{opt.hnsw.ef_search} : opt.ef_search_list;
+    for (const size_t ef : ef_values) {
+        if (opt.index == "hnsw") {
+            static_cast<ann::HNSWIndex&>(index).SetEfSearch(ef);
+        }
+        std::fprintf(stderr,
+                     "[bench] Measuring %s: ef=%zu, warmup=%zu, runs=%zu\n",
+                     index.Name(),
+                     opt.index == "hnsw" ? ef : 0,
+                     opt.warmup,
+                     opt.runs);
+        // ---------------- 预热与测量 ----------------
+        ann::bench::LatencyRecorder latency;
+        ann::bench::QpsTimer timer;
 
-    for (size_t r = 0; r < opt.warmup; ++r) {
-        ann::bench::LatencyRecorder dummy;
-        ann::bench::QpsTimer dummy_timer;
-        RunRound(index, ds.queries.data(), ds.nq, opt.k, ds.dim, &dummy, &dummy_timer);
-    }
+        for (size_t r = 0; r < opt.warmup; ++r) {
+            ann::bench::LatencyRecorder dummy;
+            ann::bench::QpsTimer dummy_timer;
+            RunRound(index, ds.queries.data(), ds.nq, opt.k, ds.dim, &dummy, &dummy_timer);
+        }
 
-    latency.Reset();
-    for (size_t r = 0; r < opt.runs; ++r) {
-        RunRound(index, ds.queries.data(), ds.nq, opt.k, ds.dim, &latency, &timer);
-    }
+        latency.Reset();
+        for (size_t r = 0; r < opt.runs; ++r) {
+            RunRound(index, ds.queries.data(), ds.nq, opt.k, ds.dim, &latency, &timer);
+        }
 
-    // ---------------- 计算指标 ----------------
-    // 用最后一轮的返回结果计算召回率。
-    std::vector<ann::dist_t> last_dists(ds.nq * opt.k);
-    std::vector<ann::idx_t> last_ids(ds.nq * opt.k);
-    {
-        ann::ResultView out{last_dists.data(), last_ids.data(), opt.k};
-        index.SearchBatch(ds.queries.data(), ds.nq, opt.k, out);
-    }
+        // ---------------- 计算指标 ----------------
+        // 额外执行一轮只统计召回，不计入正式查询时间。
+        std::vector<ann::dist_t> last_dists(ds.nq * opt.k);
+        std::vector<ann::idx_t> last_ids(ds.nq * opt.k);
+        {
+            ann::ResultView out{last_dists.data(), last_ids.data(), opt.k};
+            index.SearchBatch(ds.queries.data(), ds.nq, opt.k, out);
+        }
 
-    const double recall =
-        ann::bench::RecallAtK(last_ids.data(), ds.nq, opt.k, gt.data(), gt_dim);
-    const ann::bench::LatencyRecorder::Stats st = latency.Compute();
+        const double recall =
+            ann::bench::RecallAtK(last_ids.data(), ds.nq, opt.k, gt.data(), gt_dim);
+        const ann::bench::LatencyRecorder::Stats st = latency.Compute();
 
-    // ---------------- 输出 ----------------
-    std::printf("\n");
-    std::printf("=== ann-engine benchmark ===\n");
-    std::printf("index        : %s\n", index.Name());
-    std::printf("metric       : %s\n", MetricName(opt.metric));
-    const auto& cpu = ann::CpuFeatures::Get();
-    const auto dist_fn = ann::SelectDistFn(opt.metric);
-    const bool simd = dist_fn == ann::L2SqrAVX2Four || dist_fn == ann::InnerProductAVX2Four;
-    std::printf("cpu avx2/fma : %s/%s\n", cpu.avx2 ? "yes" : "no", cpu.fma ? "yes" : "no");
-    std::printf("distance fn  : %s\n", simd ? "AVX2Four" : "Scalar");
-    std::printf("data source  : %s\n", synthetic ? "synthetic" : opt.data_dir.c_str());
-    std::printf("base         : %zu x %zu\n", ds.n, ds.dim);
-    std::printf("queries      : %zu\n", ds.nq);
-    std::printf("k            : %zu\n", opt.k);
-    std::printf("warmup/runs  : %zu/%zu\n", opt.warmup, opt.runs);
-    if (opt.index == "hnsw") {
-        const auto& hnsw = static_cast<const ann::HNSWIndex&>(index);
-        const auto stats = hnsw.GetStats();
-        std::printf("M/Mmax0      : %zu/%zu\n", hnsw.Params().M, hnsw.Params().Mmax0);
-        std::printf("ef build/run : %zu/%zu\n", hnsw.Params().ef_construction, hnsw.GetEfSearch());
-        std::printf("max level    : %d\n", stats.max_level);
-        std::printf("avg degree0  : %.2f\n", stats.avg_degree_l0);
-    }
-    std::printf("\n");
-    std::printf("build time   : %.3f s\n", build_seconds);
-    std::printf("memory       : %.1f MB\n",
-                static_cast<double>(index.MemoryUsage()) / (1024.0 * 1024.0));
-    std::printf("recall@%-5zu : %.6f\n", opt.k, recall);
-    std::printf("qps          : %.1f\n", timer.Qps());
-    std::printf("latency mean : %.4f ms\n", st.mean);
-    std::printf("latency p50  : %.4f ms\n", st.p50);
-    std::printf("latency p95  : %.4f ms\n", st.p95);
-    std::printf("latency p99  : %.4f ms\n", st.p99);
-    std::printf("latency max  : %.4f ms\n", st.max);
-    std::printf("\n");
-
-    if (synthetic && opt.index == "hnsw") {
-        std::printf("note: synthetic ground truth was computed independently with FlatIndex.\n");
-    } else if (synthetic) {
-        std::printf("note: synthetic data uses FlatIndex as its own ground truth,\n");
-        std::printf("      so recall is 1.0 by construction. Use --data for a real check.\n");
+        // ---------------- 输出 ----------------
         std::printf("\n");
+        std::printf("=== ann-engine benchmark ===\n");
+        std::printf("index        : %s\n", index.Name());
+        std::printf("metric       : %s\n", MetricName(opt.metric));
+        const auto& cpu = ann::CpuFeatures::Get();
+        const auto dist_fn = ann::SelectDistFn(opt.metric);
+        const bool simd = dist_fn == ann::L2SqrAVX2Four || dist_fn == ann::InnerProductAVX2Four;
+        std::printf("cpu avx2/fma : %s/%s\n", cpu.avx2 ? "yes" : "no", cpu.fma ? "yes" : "no");
+        std::printf("distance fn  : %s\n", simd ? "AVX2Four" : "Scalar");
+        std::printf("data source  : %s\n", synthetic ? "synthetic" : opt.data_dir.c_str());
+        std::printf("base         : %zu x %zu\n", ds.n, ds.dim);
+        std::printf("queries      : %zu\n", ds.nq);
+        std::printf("k            : %zu\n", opt.k);
+        std::printf("warmup/runs  : %zu/%zu\n", opt.warmup, opt.runs);
+        if (opt.index == "hnsw") {
+            const auto& hnsw = static_cast<const ann::HNSWIndex&>(index);
+            const auto stats = hnsw.GetStats();
+            std::printf("M/Mmax0      : %zu/%zu\n", hnsw.Params().M, hnsw.Params().Mmax0);
+            std::printf(
+                "ef build/run : %zu/%zu\n", hnsw.Params().ef_construction, hnsw.GetEfSearch());
+            std::printf("max level    : %d\n", stats.max_level);
+            std::printf("avg degree0  : %.2f\n", stats.avg_degree_l0);
+        }
+        std::printf("\n");
+        std::printf("build time   : %.3f s\n", build_seconds);
+        std::printf("memory       : %.1f MB\n",
+                    static_cast<double>(index.MemoryUsage()) / (1024.0 * 1024.0));
+        std::printf("recall@%-5zu : %.6f\n", opt.k, recall);
+        std::printf("qps          : %.1f\n", timer.Qps());
+        std::printf("latency mean : %.4f ms\n", st.mean);
+        std::printf("latency p50  : %.4f ms\n", st.p50);
+        std::printf("latency p95  : %.4f ms\n", st.p95);
+        std::printf("latency p99  : %.4f ms\n", st.p99);
+        std::printf("latency max  : %.4f ms\n", st.max);
+        std::printf("\n");
+
+        if (synthetic && opt.index == "hnsw") {
+            std::printf(
+                "note: synthetic ground truth was computed independently with FlatIndex.\n");
+        } else if (synthetic) {
+            std::printf("note: synthetic data uses FlatIndex as its own ground truth,\n");
+            std::printf("      so recall is 1.0 by construction. Use --data for a real check.\n");
+            std::printf("\n");
+        }
+
+        if (csv.is_open()) {
+            const auto& params = opt.hnsw;
+            const bool hnsw = opt.index == "hnsw";
+            csv << index.Name() << ',' << MetricName(opt.metric) << ',' << ds.n << ',' << ds.dim
+                << ',' << ds.nq << ',' << opt.k << ',' << (hnsw ? params.M : 0) << ','
+                << (hnsw ? params.Mmax0 : 0) << ',' << (hnsw ? params.ef_construction : 0) << ','
+                << (hnsw ? ef : 0) << ',' << (hnsw ? std::max(ef, opt.k) : 0) << ',' << opt.seed
+                << ',' << opt.warmup << ',' << opt.runs << ',' << build_seconds << ','
+                << index.MemoryUsage() << ',' << recall << ',' << timer.Qps() << ',' << st.mean
+                << ',' << st.p50 << ',' << st.p95 << ',' << st.p99 << ',' << st.max << '\n';
+            csv.flush();
+        }
+        std::fflush(stdout);
     }
 
     return 0;
