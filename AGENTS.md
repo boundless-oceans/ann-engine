@@ -9,7 +9,7 @@
 
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
-> **P2 已完成主要本机验收，待用户提交收尾并合回 main；P1 已合回 main，保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
+> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 分支推进 KMeans；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
@@ -222,3 +222,12 @@
 - 破坏性操作（删除、批量重写）先 dry-run 再执行
 - 涉及性能数字时，**必须同时记录测量环境**：CPU 型号 · 核心数 · 频率调节状态 · 是否 warmup · 单/多线程
 - 注释用**中文**；字符串字面量、控制台输出、构建脚本的输出用**英文**
+
+
+## P3 当前接续点（2026-10-23）
+
+- 用户已完成 P2 收尾提交并合回 main（045f26b），已创建并切换到 feat/p3-ivf-and-quantization；Git 写操作仍由用户执行。上文 P2 历史记录中的“待提交/合并”已由此更新，不重做 P2 长评测。
+- 当前实现 KMeans：公开签名沿用 docs/design/interfaces.md，L2 k-means++ 初始化、固定次数 Lloyd、空簇最远样本重置。距离及均值 double 累加，输出 float，等距选较小簇 ID；最终 ClusterSizes 对应交付质心的重新分配，重复点允许最终空簇。
+- Train 成功才提交输出、统计及 RNG；同实例连续训练延续 RNG，同环境同种子调用序列复现，不保证跨标准库/libm 逐位一致。Assign 为 const，无成员写入；Train 不与同实例其他操作并发。输入需有限且 n>=k；不新增 metric 参数，不把 L2 聚类描述为 IP/余弦专用训练。
+- 第一块仅聚类训练器，尚无 IVF/SQ/PQ、SIMD 训练优化、真实大数据训练或 P3 性能验收；复杂度 O(iters×n×k×dim)，空间 O(n+k×dim)。取舍 ADR-0012，学习与面试表 docs/learn/kmeans.md，验证记录 docs/validation/p3.md。
+- 代理完成 GCC11.4 rel/san 各150项CTest（新增12项KMeans）；san临时detect_leaks=0，完整日志无ASan/UBSan告警，未验证泄漏。clang-format、diff检查通过；clang-tidy补齐GCC标准库路径后退出0，仍有风格建议。本块尚未提交，用户此前默认san138项不替代本块新增测试。
