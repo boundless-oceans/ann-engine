@@ -251,3 +251,11 @@
 - rel/san各172项CTest通过，新增1项IVF CLI检查（总170个GoogleTest+2个CLI），原HNSW CLI已适配并通过。san临时detect_leaks=0，完整日志无ASan/UBSan告警；本轮未改核心索引实现。
 - 小规模Flat/IVF同轮链路已完成，原始目录data/p3-results/ivf-flat-synthetic-0vx5kj1o；i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo/AVX2Four、单线程CPU0、powersave/允许Turbo/接电，电源模式与实际频率/温度未确认。合成5000×16/100查询、L2/k10/seed42、warmup1/runs3，IVF nlist16/iters5，nprobe1/4/16的严格Recall0.430/0.816/1.000。负载很短，仅链路演示，不宣称稳定加速比或P3验收。
 - 协议/汇总bench/ivf.md，学习和面试表docs/learn/ivf-benchmark.md，阶段docs/validation/p3.md。当前评测入口及记录未提交；下一步用户提交后继续真实子集nprobe测量，尚无真实数据IVF/Faiss对照或SQ/PQ。不得静默增加训练采样或更改验收目标。
+
+
+### IVF 真实子集起步测量（2026-10-24）
+
+- 用户已提交评测入口fe606e2与记录1999ff4。当前仍在feat/p3-ivf-flat；基于干净1999ff4，顺序完成Flat/IVF的SIFT前10000条×128维、全部10000查询对照。截断库使用独立Flat重算严格ID参考，不能用原百万库官方答案。L2/k10、IVF nlist32/iters5/seed42，一份索引扫描nprobe1/4/16/32，严格Recall0.566530/0.925550/0.999910/1.000000。
+- 原始目录data/p3-results/ivf-flat-sift10k-t_pu4_gx，保存命令、CMakeCache/构建日志、CPU/系统/编译器、数据与二进制摘要、阶段前后环境、完整输出/CSV；两进程退出0。rel构建检查no work to do，本轮代码未改、不重复跑172项CTest；仅文档和学习记录改动，Git写操作仍用户执行。
+- 环境i7-14650HX16核/24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo/AVX2Four，单线程CPU0、powersave/允许Turbo/接电，每点预热1/正式3轮；电源模式未确认，实际频率/温度及背景负载未完整采样，未随机化顺序/重复训练/置信区间。详细数值bench/ivf.md；本轮全探测QPS低于Flat，不宣称全探测必然更快，无perf定位。
+- 这是10k起步基线，不是全量SIFT1M、Faiss IVF或P3压缩验收，P0原严格Recall决定不变。下一步用户提交本轮记录后，可将feat/p3-ivf-flat合回feat/p3-ivf-and-quantization，再建SQ8功能分支。当前尚无SQ/PQ/残差编解码；不得静默引入训练采样、并行、接口或大方向改变。

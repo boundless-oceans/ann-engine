@@ -48,7 +48,7 @@ taskset -c 0 ./build-rel/bin/ann_bench \
 
 CPU0需在本机允许列表内；记录是否接电、电源模式，测前和测后保存频率调节状态。不要为了测量静默修改系统电源设置。需要同轮Flat对照时使用相同 n/nq/dim/k/seed/warmup/runs 和CPU绑定，只省略IVF专用参数。进程按顺序执行，避免同时跑造成干扰。
 
-真实数据子集可使用 --data data --max-base 10000 --nlist 32 --kmeans-iters 5 --nprobe-list 1,4,16,32 替换上述合成数据参数。--data 的查询数取自文件，--nq 不截断磁盘查询；截断base时会重算该子集的Flat参考。该例尚未由本轮执行。当前训练复杂度 O(iters×n×nlist×dim)，不要把小规模训练耗时直接外推到全量百万数据。
+真实数据子集可使用 --data data --max-base 10000 --nlist 32 --kmeans-iters 5 --nprobe-list 1,4,16,32 替换上述合成数据参数。--data 的查询数取自文件，--nq 不截断磁盘查询；截断base时会重算该子集的Flat参考。该配置现已完成，见后面的真实子集记录。当前训练复杂度 O(iters×n×nlist×dim)，不要把小规模训练耗时直接外推到全量百万数据。
 
 ## 本机小规模链路检查（2026-10-23）
 
@@ -65,8 +65,44 @@ CPU0需在本机允许列表内；记录是否接电、电源模式，测前和�
 
 IVF 本轮构建0.006338s，MemoryUsage=341268字节；Flat构建0.000274s，MemoryUsage=320072字节。内存为对象和成员数组申请容量，不是峰值RSS，不含构建/查询工作区。这里的用途是确认独立参考、一次构建及探测范围，不代表量化压缩率或P3验收达标。
 
+## SIFT 前10,000条真实子集（2026-10-24）
+
+基于干净提交1999ff4，在feat/p3-ivf-flat顺序运行Flat和IVF。原始目录data/p3-results/ivf-flat-sift10k-t_pu4_gx，保存CMakeCache、构建日志、CPU/编译器/系统、数据与二进制SHA256、完整命令、进程前后环境、控制台/阶段输出和CSV；两个进程均退出0。构建检查为no work to do，核心代码未改。本轮只测量和补文档，未重复运行既有172项CTest。
+
+数据为SIFT原始base前10,000条、128维，使用全部10,000条查询，L2、k10；因截断库，官方groundtruth弃用，在同一子集上由Flat重新计算严格ID参考。IVF nlist32、kmeans_iters5、seed42；nprobe1/4/16/32共用一份索引。训练参数是起步基线，不声称最优或已充分收敛。
+
+环境：i7-14650HX，16物理核/24逻辑CPU，Ubuntu22.04、GCC11.4、RelWithDebInfo、AVX2Four；单线程固定CPU0。2026-10-24 20:13:08–20:13:33（UTC+8）内顺序测量，阶段快照powersave、允许Turbo、接电，每点预热1轮/正式3轮。电源模式未确认，实际频率/温度未采样；记录了边界loadavg，但未完整采样背景负载。未随机化顺序、重复训练或计算置信区间。
+
+| 索引 | nprobe | 严格Recall@10 | QPS | P99 ms |
+|---|---:|---:|---:|---:|
+| Flat | — | 1.000000 | 8211.3 | 0.160049 |
+| IVFFlat | 1 | 0.566530 | 130645.5 | 0.013435 |
+| IVFFlat | 4 | 0.925550 | 41114.7 | 0.038262 |
+| IVFFlat | 16 | 0.999910 | 11781.0 | 0.126732 |
+| IVFFlat | 32 | 1.000000 | 5879.0 | 0.240454 |
+
+IVF构建0.179328s，MemoryUsage=5176692字节；Flat构建0.000543s，MemoryUsage=5120072字节。内存均为对象与成员数组申请容量，不是RSS，也不包含临时空间；未量化IVF没有压缩原始向量，另有质心、偏移和ID数组。
+
+本轮全探测召回达到1.0，但QPS低于Flat。列表/间接访问和不同top-k实现都有成本，没有perf定位，不将差异归因于某个已证明的瓶颈。减少探测可提高本轮QPS，同时可能漏簇；选择工作点必须同时报告召回和吞吐。这是10k子集基线，不是全量SIFT1M、Faiss IVF对照或P3压缩≥8倍/Recall≥0.90的最终验收。P0严格1.0原未达标记录保持不变。
+
+复现本轮参数（先按前文保存环境，再顺序执行）：
+
+```bash
+mkdir -p data/p3-results
+ivf_subset_dir=$(mktemp -d "$PWD/data/p3-results/ivf-sift10k-XXXXXX")
+taskset -c 0 ./build-rel/bin/ann_bench \
+  --index flat --data data --max-base 10000 --k 10 --metric l2 \
+  --seed 42 --warmup 1 --runs 3 --csv "$ivf_subset_dir/flat.csv" \
+  > "$ivf_subset_dir/flat-console.txt" 2> "$ivf_subset_dir/flat-progress.txt"
+taskset -c 0 ./build-rel/bin/ann_bench \
+  --index ivf --data data --max-base 10000 --k 10 --metric l2 \
+  --nlist 32 --kmeans-iters 5 --nprobe-list 1,4,16,32 \
+  --seed 42 --warmup 1 --runs 3 --csv "$ivf_subset_dir/ivf.csv" \
+  > "$ivf_subset_dir/ivf-console.txt" 2> "$ivf_subset_dir/ivf-progress.txt"
+```
+
 ## 验证与后续
 
-本轮 rel/san各172项CTest通过（170项GoogleTest+2项CLI）；san临时detect_leaks=0，完整日志无ASan/UBSan告警。新增CLI检查覆盖只构建一次、CSV参数、独立参考、重复点、全探测/超范围截断、单值与扫描、格式/互斥/错误索引和默认Flat兼容。原HNSW扫描检查已适配新增CSV列并通过。
+本轮 rel/san各172项CTest通过（170项GoogleTest+2项CLI）；san临时detect_leaks=0，完整日志无ASan/UBSan告警。新增CLI检查覆盖只构建一次、CSV参数、独立参考、重复参数点、全探测/超范围截断、单值与扫描、格式/互斥/错误索引和默认Flat兼容。原HNSW扫描检查已适配新增CSV列并通过。
 
-下一步完成真实子集的nprobe测量，单独评估训练时间和查询召回，再决定是否需要训练采样/加速；这些改变不在本次实现中。随后接入SQ/PQ。学习/面试笔记在本机 docs/learn/ivf-benchmark.md，阶段验证见 docs/validation/p3.md。
+真实子集的nprobe起步测量已完成。下一步提交本轮记录后，可将IVFFlat功能分支合回P3集成分支，再准备SQ8功能分支；大规模训练采样/加速仍需后续证据和设计确认，不在本轮中静默加入。学习/面试笔记在本机 docs/learn/ivf-benchmark.md，阶段验证见 docs/validation/p3.md。
