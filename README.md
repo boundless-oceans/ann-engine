@@ -47,7 +47,7 @@
 | P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
 | P1 | SIMD 距离 + 内存池 | ✅ 已完成集成验证并合回 main，记录见下文 |
 | P2 | HNSW | ✅ 全量曲线、同轮Python Faiss对照及本机验收通过，已合回 main |
-| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 已实现，IVF 量化接入与 PQ 待推进 |
+| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 与 IVF 残差查询已实现；量化评测与 PQ 待推进 |
 | P4 | 持久化 + 崩溃恢复 | ⬜ 未开始 |
 | P5 | 服务化（gRPC / HTTP） | ⬜ 未开始 |
 | P6 | 差异化（过滤检索 / GPU 批量距离 / 删除） | ⬜ 未开始 |
@@ -384,7 +384,7 @@ SIFT1M（1M × 128d）。**不入库**（体积大），获取方式见 [data/RE
 
 `feat/p3-ivf-flat` 已实现 `ann/ivf.h`：先 Add 收集数据，再 Build 训练粗中心并建立 CSR，构建后静态只读。用户确认首版仅支持 L2；内积及量化留待后续。查询按 nprobe 选择列表，列表成员保留原始插入 ID，局部最大堆维护 top-k；nprobe>=nlist 时扫描全库。候选不足时填哨兵，不自动扩大扫描。
 
-查询使用函数内工作区，因此会分配内存；nprobe 原子更新，每次查询读取一次。Build/Add 不与查询或统计并发。构造签名沿用设计，`quantizer.h` 已提供独立 SQ8 实现，但 IVF 尚未接入量化器，传入非空量化器仍会明确报错。`ann_bench` 已支持 IVF 单值与 nprobe 列表扫描；小规模合成链路已跑通，命令、环境和适用范围见 [IVF评测](bench/ivf.md)，已完成 SIFT10k 起步对比，尚无全量数据或量化验收结论。验证范围见 [P3阶段验证](docs/validation/p3.md)。
+查询使用函数内工作区，因此会分配内存；nprobe 原子更新，每次查询读取一次。Build/Add 不与查询或统计并发。构造签名沿用设计，`quantizer.h` 已提供独立 SQ8 实现，IVF 现已接入维度匹配的内置 SQ8 残差路径，未知量化器仍拒绝。`ann_bench` 已支持 IVF 单值与 nprobe 列表扫描；小规模合成链路已跑通，命令、环境和适用范围见 [IVF评测](bench/ivf.md)，已完成 SIFT10k 起步对比，尚无全量数据或量化验收结论。验证范围见 [P3阶段验证](docs/validation/p3.md)。
 
 
 2026-10-24 已在干净提交1999ff4完成 SIFT 前10,000条/全部10,000查询的同轮Flat/IVF对照。IVF nlist32、训练5轮、seed42，nprobe1/4/16/32的严格Recall分别0.566530/0.925550/0.999910/1.000000；参考为截断库上的独立Flat，不能当作百万库验收。完整参数、环境、QPS及局限见 [IVF评测](bench/ivf.md)。该轮仅测未量化IVF，尚无IVF量化召回或压缩率结论。
@@ -394,4 +394,11 @@ SIFT1M（1M × 128d）。**不入库**（体积大），获取方式见 [data/RE
 
 当前功能分支 `feat/p3-sq8` 已实现 `ScalarQuantizer` 的范围训练、uint8编解码、调用方LUT及平方L2查表；公开签名沿用总设计。每维最近取整、半格向上、越界截断，常量维固定重建。私有保存min/max端点并用double计算映射，避免float步长下溢。查询仍为float，ADC比较查询与解码后的库向量，不等于对原始库向量的精确距离。
 
-新增15项测试，rel/san各187项CTest通过；本轮san临时关闭泄漏检查，无ASan/UBSan告警。这里只交付独立量化器，IVF仍为未量化路径；尚无新的召回/性能/压缩验收结论。编码载荷每维从4字节变1字节约4倍，不含模型、倒排元数据和查询LUT，不能当作P3的PQ至少8倍目标。范围和复现命令见 [P3阶段验证](docs/validation/p3.md)，学习与面试表保存在本机 `docs/learn/sq8.md`。
+新增15项测试，rel/san各187项CTest通过；本轮san临时关闭泄漏检查，无ASan/UBSan告警。该独立阶段之后已接入下述IVF残差路径，尚无新的量化召回/性能/压缩验收结论。编码载荷每维从4字节变1字节约4倍，不含模型、倒排元数据和查询LUT，不能当作P3的PQ至少8倍目标。范围和复现命令见 [P3阶段验证](docs/validation/p3.md)，学习与面试表保存在本机 `docs/learn/sq8.md`。
+
+
+### IVF + 残差 SQ8 核心集成
+
+用户已确认编码残差：原向量训练粗中心，SQ8训练/编码x-c；查询每个非空探测簇用q-c建立局部LUT，查表后不重复加中心距离。构建成功释放原始float存储，仅保留代码、粗中心、CSR和模型；Size使用独立计数。当前仅支持维度匹配的内置ScalarQuantizer，公开签名不变，未知量化器拒绝。查询缓冲仍为函数局部，Search不修改成员。
+
+新增14项集成测试，rel/san各201项通过（本轮san关闭泄漏检查，无ASan/UBSan告警）。本块未接入ann_bench的SQ8选项，没有量化召回、真实数据性能或P3最终验收结果；IVFFlat评测入口保持原行为。后续在当前SQ8分支接入评测，再与同轮未量化IVF比较。取舍与学习记录在本机ADR-0015、docs/learn/ivf-sq8.md；验证范围见 [P3阶段验证](docs/validation/p3.md)。

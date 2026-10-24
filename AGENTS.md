@@ -268,3 +268,12 @@
 - ADC比较原始float查询与重建库向量，LUT为dim×256个float，由调用方提供，不存成员；Encode/Decode/BuildLUT/DistanceFromLUT均const无成员写入。训练成功后替换模型，失败保留旧模型；Train不与同实例操作并发。缓冲容量由调用方保证且输入输出不重叠，非有限/非法状态/空缓冲明确报错，LUT单项或总距离float溢出明确报错，浮点表仍可能有舍入/下溢。
 - 新增15项测试，代理完成GCC11.4 rel/san各187项CTest（185个GoogleTest+2个CLI），san临时detect_leaks=0，完整日志无ASan/UBSan告警，未验证泄漏/真实并发/TSan/OOM。clang-format/diff检查通过，clang-tidy补GCC路径退出0，仍有风格建议。记录docs/validation/p3.md，取舍ADR-0014，学习面试表docs/learn/sq8.md。
 - 当前仅独立量化器，IVF仍拒绝非空量化器，尚无SQ8检索/性能/量化压缩验收，不重跑既有长评测。CodeSize为dim字节，仅编码载荷约4倍压缩，模型/列表/局部LUT另算，未达到PQ至少8倍目标。下一块提交本轮实现/文档后，在同一SQ8分支明确原向量/残差与查询LUT数据流再接入IVF，不静默改变大方向。
+
+
+### P3 IVF + 残差 SQ8 核心（2026-10-24）
+
+- 独立SQ8已由用户提交0eca42b/53fb331，当前仍在feat/p3-sq8。用户明确选择“编码残差，沿用设计方向”，不是直接编码原向量。Build原向量训练粗中心/CSR后生成x-c，训练单个全局SQ8并按原ID编码；Search每个非空探测列表用q-c重建局部LUT，候选距离不再加粗距离，原IVFFlat路径保留。
+- 公开签名未变。Quantizer没有独立Dim信息，首版只接受实际类型为内置ScalarQuantizer且CodeSize==IVF维度的对象；不依赖Name字符串，未知类型拒绝，PQ扩展时须补对应验证。未新增Dim/Clone等公开接口。
+- 构建成功释放原始float容量，残差仅局部存在，独立n_保存Size/原ID语义；失败不发布结构、保留原始数据与未构建状态，私有量化器可能已训练，重试重新Train。残差double相减后检查float范围。Search const无成员写入，函数内分配残差/LUT并逐列表复用，仍非零分配。
+- 新增14项测试，代理完成GCC11.4 rel/san各201项CTest（199个GoogleTest+2个CLI），san临时detect_leaks=0，ASan/UBSan开关与完整日志核对无告警。clang-format/diff通过，clang-tidy补GCC路径退出0但保留风格建议。未做真实OOM/并发/TSan/泄漏验证。阶段docs/validation/p3.md，取舍ADR-0015，学习面试表docs/learn/ivf-sq8.md。
+- 当前核心集成及文档未提交；ann_bench尚无SQ8选择，没有新量化Recall/QPS/容量对照或最终P3验收，不重跑既有长测。下一步用户提交后在同一SQ8分支接入评测入口，并同轮比较未量化IVF与残差SQ8。Git写操作仍用户执行，生成CSV/日志仍不入库。
