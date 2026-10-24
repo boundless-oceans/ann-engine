@@ -242,3 +242,12 @@
 - 本轮先交付核心构建/查询，ann_bench 尚未支持 IVF，没有真实数据训练/性能/量化验收结论。取舍 ADR-0013，学习/面试表 docs/learn/ivf-flat.md；后续先提交核心与记录，再接入评测入口和 nprobe 对比。
 
 - IVF核心代理完成rel/san各171项CTest（新增CSR5+IVF16），san临时detect_leaks=0，完整日志无ASan/UBSan告警；clang-format/diff检查通过，clang-tidy补齐GCC标准库路径后退出0但保留风格建议。尚未运行普通终端默认san171项。当前实现/记录未提交，下一块评测入口仍在同一功能分支推进。
+
+
+### IVF 评测入口接续（2026-10-23）
+
+- 用户已提交IVF核心f27c3eb与文档7450fa6，当前仍在feat/p3-ivf-flat。已接入ann_bench的--index ivf、--nlist、--nprobe/--nprobe-list、--kmeans-iters；用户已确认首版仅L2。列表与单值互斥，严格正整数解析，保留列表顺序/重复，一次训练构建，各点独立预热/计时/召回。合成/截断库独立Flat参考，完整SIFT仍官方严格ID，不改P0平局决定。
+- CSV原23列保留名称/位置，追加nlist,nprobe,effective_nprobe,kmeans_iters共27列；Flat/HNSW追加列为0，IVF的HNSW参数为0。既有按列名HNSW绘图可用，固定23列的外部读取器需适配；不修改历史结果。运行产物仍不入库。
+- rel/san各172项CTest通过，新增1项IVF CLI检查（总170个GoogleTest+2个CLI），原HNSW CLI已适配并通过。san临时detect_leaks=0，完整日志无ASan/UBSan告警；本轮未改核心索引实现。
+- 小规模Flat/IVF同轮链路已完成，原始目录data/p3-results/ivf-flat-synthetic-0vx5kj1o；i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo/AVX2Four、单线程CPU0、powersave/允许Turbo/接电，电源模式与实际频率/温度未确认。合成5000×16/100查询、L2/k10/seed42、warmup1/runs3，IVF nlist16/iters5，nprobe1/4/16的严格Recall0.430/0.816/1.000。负载很短，仅链路演示，不宣称稳定加速比或P3验收。
+- 协议/汇总bench/ivf.md，学习和面试表docs/learn/ivf-benchmark.md，阶段docs/validation/p3.md。当前评测入口及记录未提交；下一步用户提交后继续真实子集nprobe测量，尚无真实数据IVF/Faiss对照或SQ/PQ。不得静默增加训练采样或更改验收目标。
