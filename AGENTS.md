@@ -9,7 +9,7 @@
 
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
-> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 功能分支推进未量化 IVF；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
+> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 功能分支推进独立 SQ8；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
@@ -259,3 +259,12 @@
 - 原始目录data/p3-results/ivf-flat-sift10k-t_pu4_gx，保存命令、CMakeCache/构建日志、CPU/系统/编译器、数据与二进制摘要、阶段前后环境、完整输出/CSV；两进程退出0。rel构建检查no work to do，本轮代码未改、不重复跑172项CTest；仅文档和学习记录改动，Git写操作仍用户执行。
 - 环境i7-14650HX16核/24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo/AVX2Four，单线程CPU0、powersave/允许Turbo/接电，每点预热1/正式3轮；电源模式未确认，实际频率/温度及背景负载未完整采样，未随机化顺序/重复训练/置信区间。详细数值bench/ivf.md；本轮全探测QPS低于Flat，不宣称全探测必然更快，无perf定位。
 - 这是10k起步基线，不是全量SIFT1M、Faiss IVF或P3压缩验收，P0原严格Recall决定不变。下一步用户提交本轮记录后，可将feat/p3-ivf-flat合回feat/p3-ivf-and-quantization，再建SQ8功能分支。当前尚无SQ/PQ/残差编解码；不得静默引入训练采样、并行、接口或大方向改变。
+
+
+### P3 独立 SQ8（2026-10-24）
+
+- 用户已将IVFFlat合回feat/p3-ivf-and-quantization（2b208d1），已创建feat/p3-sq8；起始干净。大功能仍在独立分支分块提交，Git写操作用户执行。
+- 已实现ScalarQuantizer，公开签名沿用总设计，源码src/quantizer.cpp。每维min/max训练，uint8最近取整/半格向上/越界截断，常量维编码0且所有码固定重建。私有存float端点而非float步长，double比例映射和lerp重建，避免极小范围步长下溢，模型仍每维两个float；这属于数值实现细节，没有更改公开接口。
+- ADC比较原始float查询与重建库向量，LUT为dim×256个float，由调用方提供，不存成员；Encode/Decode/BuildLUT/DistanceFromLUT均const无成员写入。训练成功后替换模型，失败保留旧模型；Train不与同实例操作并发。缓冲容量由调用方保证且输入输出不重叠，非有限/非法状态/空缓冲明确报错，LUT单项或总距离float溢出明确报错，浮点表仍可能有舍入/下溢。
+- 新增15项测试，代理完成GCC11.4 rel/san各187项CTest（185个GoogleTest+2个CLI），san临时detect_leaks=0，完整日志无ASan/UBSan告警，未验证泄漏/真实并发/TSan/OOM。clang-format/diff检查通过，clang-tidy补GCC路径退出0，仍有风格建议。记录docs/validation/p3.md，取舍ADR-0014，学习面试表docs/learn/sq8.md。
+- 当前仅独立量化器，IVF仍拒绝非空量化器，尚无SQ8检索/性能/量化压缩验收，不重跑既有长评测。CodeSize为dim字节，仅编码载荷约4倍压缩，模型/列表/局部LUT另算，未达到PQ至少8倍目标。下一块提交本轮实现/文档后，在同一SQ8分支明确原向量/残差与查询LUT数据流再接入IVF，不静默改变大方向。
