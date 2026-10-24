@@ -308,7 +308,7 @@ public:
     const char* Name() const override { return "Test"; }
 };
 
-TEST(IVF, RejectsQuantizerUntilQuantizedPathIsImplemented) {
+TEST(IVF, RejectsUnsupportedQuantizerTypes) {
     EXPECT_THROW(ann::IVFIndex(1, ann::Metric::L2, Params(1, 1), std::make_unique<TestQuantizer>()),
                  std::invalid_argument);
 }

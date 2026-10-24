@@ -56,6 +56,7 @@ add_executable(ann_tests
     ivf_lists_test.cpp    # CSR 偏移、空列表及原始 ID 完整性
     ivf_test.cpp          # 静态构建、nprobe 查询与独立精确参考
     scalar_quantizer_test.cpp # SQ8：范围、常量维、编解码误差与独立 ADC 参考
+    ivf_sq8_test.cpp      # 残差 SQ8：逐列表 LUT、解码参考与释放原始存储
 )
 
 # 测试私有纯选择函数，不把模拟 CPU 特性的入口暴露为公共 API。

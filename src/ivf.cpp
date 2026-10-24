@@ -32,6 +32,16 @@ dist_t CheckedDistance(DistFn distance, const float* a, const float* b, size_t d
     return value;
 }
 
+void Residual(const float* vector, const float* center, size_t dim, float* out) {
+    for (size_t d = 0; d < dim; ++d) {
+        const double value = static_cast<double>(vector[d]) - static_cast<double>(center[d]);
+        if (std::abs(value) > static_cast<double>(std::numeric_limits<float>::max())) {
+            throw std::overflow_error("IVF residual exceeds float range");
+        }
+        out[d] = static_cast<float>(value);
+    }
+}
+
 }  // namespace
 
 IVFIndex::IVFIndex(size_t dim,
@@ -49,18 +59,23 @@ IVFIndex::IVFIndex(size_t dim,
         throw std::invalid_argument("IVF requires positive representable parameters");
     }
     if (metric != Metric::L2) {
-        throw std::invalid_argument("IVFFlat currently supports L2 only");
+        throw std::invalid_argument("IVF currently supports L2 only");
     }
     if (quantizer) {
-        throw std::invalid_argument("IVFFlat does not support quantizers yet");
+        // 抽象接口尚无 Dim，首版只接入内置 SQ8，不能依赖 Name 字符串识别类型。
+        const auto* scalar = dynamic_cast<const ScalarQuantizer*>(quantizer.get());
+        if (scalar == nullptr || scalar->CodeSize() != dim) {
+            throw std::invalid_argument("IVF requires a dimension-matched built-in SQ8 quantizer");
+        }
     }
     if (dim > std::numeric_limits<size_t>::max() / sizeof(float) / params.nlist) {
         throw std::length_error("IVF centroid storage size overflow");
     }
+    quantizer_ = std::move(quantizer);
 }
 
 size_t IVFIndex::Size() const {
-    return raw_vectors_.size() / dim_;
+    return n_;
 }
 
 void IVFIndex::Add(size_t n, const float* vecs) {
@@ -78,6 +93,7 @@ void IVFIndex::Add(size_t n, const float* vecs) {
     CheckFinite(vecs, elements);
     // 原始存储没有公开可变视图，外部输入不会合法别名此私有数组。
     raw_vectors_.insert(raw_vectors_.end(), vecs, vecs + elements);
+    n_ += n;
 }
 
 void IVFIndex::Build() {
@@ -95,9 +111,33 @@ void IVFIndex::Build() {
     trainer.Train(n, raw_vectors_.data(), centers.data());
     trainer.Assign(n, raw_vectors_.data(), centers.data(), assignments.data());
     auto lists = detail::BuildIVFLists(assignments, params_.nlist);
+    std::vector<uint8_t> codes;
+    if (quantizer_) {
+        // 共享一个全局残差模型；整批残差和原始向量都不进入构建后的持久存储。
+        std::vector<float> residuals(raw_vectors_.size());
+        for (size_t id = 0; id < n; ++id) {
+            Residual(raw_vectors_.data() + id * dim_,
+                     centers.data() + size_t{assignments[id]} * dim_,
+                     dim_,
+                     residuals.data() + id * dim_);
+        }
+        if (n > codes.max_size() / dim_) {
+            throw std::length_error("IVF encoded storage size overflow");
+        }
+        codes.resize(n * dim_);
+        // 失败不发布索引结构；私有量化器可能已完成训练，重试时会重新 Train。
+        quantizer_->Train(n, residuals.data());
+        for (size_t id = 0; id < n; ++id) {
+            quantizer_->Encode(residuals.data() + id * dim_, codes.data() + id * dim_);
+        }
+    }
     centroids_.swap(centers);
     list_offsets_.swap(lists.offsets);
     list_ids_.swap(lists.ids);
+    codes_.swap(codes);
+    if (quantizer_) {
+        std::vector<float>().swap(raw_vectors_);
+    }
     built_ = true;
 }
 
@@ -127,13 +167,28 @@ void IVFIndex::Search(const float* query, size_t k, ResultView out) const {
     std::vector<Candidate> results;
     const size_t limit = std::min(want, Size());
     results.reserve(limit);
+    std::vector<float> residual_query, lut;
+    if (quantizer_) {
+        residual_query.resize(dim_);
+        lut.resize(quantizer_->LutSize());
+    }
     for (size_t p = 0; p < probes; ++p) {
         const size_t c = probes == params_.nlist ? p : clusters[p].second;
+        if (list_offsets_[c] == list_offsets_[c + 1]) {
+            continue;
+        }
+        if (quantizer_) {
+            Residual(query, centroids_.data() + c * dim_, dim_, residual_query.data());
+            quantizer_->BuildLUT(residual_query.data(), lut.data());
+        }
         for (size_t pos = list_offsets_[c]; pos < list_offsets_[c + 1]; ++pos) {
             const idx_t id = list_ids_[pos];
-            const Candidate candidate{
-                CheckedDistance(dist_fn_, query, raw_vectors_.data() + size_t{id} * dim_, dim_),
-                id};
+            const dist_t distance =
+                quantizer_
+                    ? quantizer_->DistanceFromLUT(lut.data(), codes_.data() + size_t{id} * dim_)
+                    : CheckedDistance(
+                          dist_fn_, query, raw_vectors_.data() + size_t{id} * dim_, dim_);
+            const Candidate candidate{distance, id};
             if (results.size() < limit) {
                 results.push_back(candidate);
                 std::push_heap(results.begin(), results.end());
@@ -153,7 +208,8 @@ void IVFIndex::Search(const float* query, size_t k, ResultView out) const {
 
 size_t IVFIndex::MemoryUsage() const {
     return sizeof(*this) + (raw_vectors_.capacity() + centroids_.capacity()) * sizeof(float) +
-           (list_offsets_.capacity() + list_ids_.capacity()) * sizeof(uint32_t);
+           (list_offsets_.capacity() + list_ids_.capacity()) * sizeof(uint32_t) +
+           codes_.capacity() * sizeof(uint8_t) + (quantizer_ ? quantizer_->MemoryUsage() : 0);
 }
 
 void IVFIndex::SetNProbe(size_t nprobe) noexcept {
