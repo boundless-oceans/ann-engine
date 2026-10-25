@@ -47,7 +47,7 @@
 | P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
 | P1 | SIMD 距离 + 内存池 | ✅ 已完成集成验证并合回 main，记录见下文 |
 | P2 | HNSW | ✅ 全量曲线、同轮Python Faiss对照及本机验收通过，已合回 main |
-| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 与 IVF 残差查询已实现；量化评测与 PQ 待推进 |
+| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 与 IVF 残差查询已实现；SQ8 评测起步对照已完成，PQ 待推进 |
 | P4 | 持久化 + 崩溃恢复 | ⬜ 未开始 |
 | P5 | 服务化（gRPC / HTTP） | ⬜ 未开始 |
 | P6 | 差异化（过滤检索 / GPU 批量距离 / 删除） | ⬜ 未开始 |
@@ -401,4 +401,11 @@ SIFT1M（1M × 128d）。**不入库**（体积大），获取方式见 [data/RE
 
 用户已确认编码残差：原向量训练粗中心，SQ8训练/编码x-c；查询每个非空探测簇用q-c建立局部LUT，查表后不重复加中心距离。构建成功释放原始float存储，仅保留代码、粗中心、CSR和模型；Size使用独立计数。当前仅支持维度匹配的内置ScalarQuantizer，公开签名不变，未知量化器拒绝。查询缓冲仍为函数局部，Search不修改成员。
 
-新增14项集成测试，rel/san各201项通过（本轮san关闭泄漏检查，无ASan/UBSan告警）。本块未接入ann_bench的SQ8选项，没有量化召回、真实数据性能或P3最终验收结果；IVFFlat评测入口保持原行为。后续在当前SQ8分支接入评测，再与同轮未量化IVF比较。取舍与学习记录在本机ADR-0015、docs/learn/ivf-sq8.md；验证范围见 [P3阶段验证](docs/validation/p3.md)。
+新增14项集成测试，rel/san各201项通过（本轮san关闭泄漏检查，无ASan/UBSan告警）。SQ8评测入口与下述起步对照现已完成；IVFFlat默认入口保持原行为，P3最终验收仍待PQ。取舍与学习记录在本机ADR-0015、docs/learn/ivf-sq8.md；验证范围见 [P3阶段验证](docs/validation/p3.md)。
+
+
+### SQ8 评测入口与起步对照（2026-10-25）
+
+`ann_bench --index ivf --quantizer sq8`选择残差量化，默认none保持IVFFlat。CSV追加量化/编码/LUT元数据至31列，既有列名和顺序保留。rel/san各202项测试通过，本轮san关闭泄漏检查，无ASan/UBSan告警。
+
+在同轮SIFT10k库、前100条查询对照中，SQ8索引申请容量从5176732降至1337828字节（约3.87倍），但查询显著变慢，召回略降；这不是压缩带来加速的结果。完整环境、nprobe曲线、复现命令及适用范围见 [IVF与SQ8评测](bench/ivf.md)。没有全量SIFT1M、Faiss SQ8或P3最终量化验收结论。

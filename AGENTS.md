@@ -277,3 +277,12 @@
 - 构建成功释放原始float容量，残差仅局部存在，独立n_保存Size/原ID语义；失败不发布结构、保留原始数据与未构建状态，私有量化器可能已训练，重试重新Train。残差double相减后检查float范围。Search const无成员写入，函数内分配残差/LUT并逐列表复用，仍非零分配。
 - 新增14项测试，代理完成GCC11.4 rel/san各201项CTest（199个GoogleTest+2个CLI），san临时detect_leaks=0，ASan/UBSan开关与完整日志核对无告警。clang-format/diff通过，clang-tidy补GCC路径退出0但保留风格建议。未做真实OOM/并发/TSan/泄漏验证。阶段docs/validation/p3.md，取舍ADR-0015，学习面试表docs/learn/ivf-sq8.md。
 - 当前核心集成及文档未提交；ann_bench尚无SQ8选择，没有新量化Recall/QPS/容量对照或最终P3验收，不重跑既有长测。下一步用户提交后在同一SQ8分支接入评测入口，并同轮比较未量化IVF与残差SQ8。Git写操作仍用户执行，生成CSV/日志仍不入库。
+
+
+### SQ8 评测入口与同轮起步对照（2026-10-25）
+
+- 用户已提交核心e9e27fe与文档ff402cf，当前仍feat/p3-sq8。已接入--quantizer none|sq8（仅IVF），默认none，SQ8仍为用户确认的残差方案；复用nprobe单次构建扫描与独立Flat参考。CSV原27列保留，追加quantizer,encoding,code_size,lut_floats至31列。控制台区分AVX2Four粗路由和标量ADC。
+- rel/san各202项CTest通过（199个GoogleTest+3个CLI），新增SQ8 CLI，原IVF/HNSW CLI适配31列并通过；san临时detect_leaks=0，完整日志无ASan/UBSan告警，clang-format/diff检查通过。本轮不改核心索引算法。
+- 同轮SIFT前10000条/128维、原查询前100条、L2/k10/nlist32/iters5/seed42/nprobe1,4,16,32，预热1/正式3轮，先IVFFlat后SQ8，两进程退出0。原始目录data/p3-results/sq8-sift10k-q100-ejxigkwi，包含命令/环境/CMakeCache/数据源码二进制摘要/完整输出CSV/查询前缀视图；base链接原完整文件，查询参考仅复制前100条，max-base清除官方参考并独立重算Flat。未改原数据。
+- 环境i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo、单线程CPU0、powersave/允许Turbo/接电；电源模式未确认，实际频率/温度/背景负载未完整采样，未随机化顺序/置信区间。申请容量5176732->1337828字节（约3.87倍），但SQ8明显变慢，nprobe16/32的严格Recall从1.000到0.989。详细数值bench/ivf.md；不是RSS/峰值，100查询不与历史10000查询耗时直接相除。
+- 已知逐非空列表建表和标量ADC存在成本，但尚无perf/阶段计时，不把全部慢归因于已证明瓶颈；不宣称压缩带来加速或P3最终验收达成。学习面试表docs/learn/sq8-benchmark.md，阶段docs/validation/p3.md。当前入口/记录未提交，下一步用户提交后可将SQ8合回P3，再准备PQ；若优化SQ8，应先定位成本，不静默改残差策略或公开接口。Git写操作用户执行，CSV/日志继续不入库。
