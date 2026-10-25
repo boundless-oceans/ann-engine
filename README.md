@@ -47,7 +47,7 @@
 | P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
 | P1 | SIMD 距离 + 内存池 | ✅ 已完成集成验证并合回 main，记录见下文 |
 | P2 | HNSW | ✅ 全量曲线、同轮Python Faiss对照及本机验收通过，已合回 main |
-| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 与 IVF 残差查询已实现；SQ8 起步对照已完成，独立 PQ 已实现；IVF-PQ 与验收待推进 |
+| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 与 IVF 残差查询已实现；SQ8 起步对照已完成，PQ 核心与 IVF 残差路径已实现；PQ 评测与验收待推进 |
 | P4 | 持久化 + 崩溃恢复 | ⬜ 未开始 |
 | P5 | 服务化（gRPC / HTTP） | ⬜ 未开始 |
 | P6 | 差异化（过滤检索 / GPU 批量距离 / 删除） | ⬜ 未开始 |
@@ -415,4 +415,11 @@ SIFT1M（1M × 128d）。**不入库**（体积大），获取方式见 [data/RE
 
 当前 `feat/p3-pq` 实现独立 `ProductQuantizer`，按总设计将dim等分为m段，各段用已有KMeans固定25轮训练，码本默认256中心，每段编码一个字节；不整除或ksub超出1–256时拒绝。支持编解码和调用方LUT的平方L2 ADC，查询不量化，模型不保存查询缓冲。距离double累加后检查float范围，LUT先检查再填表，两遍计算是当前正确性基线的成本。
 
-新增16项测试，rel/san各218项通过，本轮san关闭泄漏检查，无ASan/UBSan告警。此块尚未接入IVF或ann_bench，没有PQ召回、训练速度、整体压缩率或P3最终验收结论。128维/m16的理论编码载荷32倍压缩不包含码本、列表和查询工作区。学习与面试表在本机 `docs/learn/pq.md`，阶段验证见 [P3验证](docs/validation/p3.md)。
+新增16项测试，rel/san各218项通过，本轮san关闭泄漏检查，无ASan/UBSan告警。该独立实现阶段未接入IVF或ann_bench；后续核心集成见下节，当前仍无PQ召回、训练速度、整体压缩率或P3最终验收结论。128维/m16的理论编码载荷32倍压缩不包含码本、列表和查询工作区。学习与面试表在本机 `docs/learn/pq.md`，阶段验证见 [P3验证](docs/validation/p3.md)。
+
+
+### IVF-PQ 核心集成（2026-10-25）
+
+用户确认给 `Quantizer` 基类新增只读 `Dim()`，内置SQ8/PQ统一校验原始宽度，代码分配和寻址改用独立 `CodeSize()`。PQ码长m不再被当成dim；现支持内置匹配维度的残差PQ，名称为IVFPQ。数据流沿用x-c训练/编码、逐列表q-c建表，成功构建释放原始float。
+
+新增接口使自定义Quantizer派生类需要补Dim实现；不是源码/ABI兼容承诺。新增13项集成测试，rel/san各231项通过，本轮san关闭泄漏检查，无ASan/UBSan告警。当前仅完成核心接入，CLI尚无PQ选择，没有真实数据Recall/QPS/整体压缩率或最终P3验收结论。学习面试表在本机 `docs/learn/ivf-pq.md`，阶段记录见 [P3验证](docs/validation/p3.md)。

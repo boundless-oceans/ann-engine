@@ -9,7 +9,7 @@
 
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
-> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 功能分支推进独立 PQ；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
+> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 功能分支推进 IVF-PQ；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
@@ -295,3 +295,11 @@
 - Encode最近double L2、等距低码字；Decode拼接，ADC保留原查询、float LUT/double累加。BuildLUT两遍检查/填表避免失败留下半张表且不内部分配，代价是重复距离计算。查询方法const不改成员、缓冲调用方提供且输入输出不重叠；Train不与同实例其他操作并发。
 - 新增16项测试，代理GCC11.4 rel/san各218项CTest通过（215个GoogleTest+3个CLI），san临时detect_leaks=0，完整日志无ASan/UBSan告警；clang-format/diff通过，clang-tidy补GCC路径退出0仍有风格建议。无真实OOM/并发/TSan/泄漏验证。阶段docs/validation/p3.md，取舍ADR-0016，学习面试表docs/learn/pq.md。
 - 仅独立PQ，尚无IVF-PQ/CLI/真实数据性能/召回/整体压缩验收；理论载荷比不能代替P3目标。IVF当前仍只接受内置匹配维度SQ8；PQ CodeSize=m不等于Dim，后续接入需明确安全形状校验，不静默加公开Dim/Clone。当前实现/记录未提交；用户提交后继续同一PQ分支接入残差流程，Git写操作用户执行。
+
+
+### IVF-PQ 核心与统一 Dim 契约（2026-10-25）
+
+- 独立PQ已由用户提交3924109/1063ace，当前仍feat/p3-pq。用户明确确认“基类新增Dim()，统一维度校验”，此授权覆盖新增Quantizer::Dim纯虚方法及SQ8/PQ/测试派生类实现；自定义派生类需补Dim，不承诺源码/ABI兼容。Dim/CodeSize/LutSize构造确定、训练不改，设计接口本机文档同步。不要把此前未批准Dim的历史记录当作当前禁令。
+- IVF统一比较Dim而非CodeSize，缓存实际码长作为代码分配/ID寻址步长；内置SQ8/PQ分别报告IVFSQ8/IVFPQ，默认IVFFlat保留。仍限制为内置支持类型，不依赖Name字符串。沿用既定残差x-c训练/编码、q-c逐列表LUT，候选不加粗距离；成功释放raw、Size独立计数，失败不发布结构、可补样本重试。
+- 新增13项IVFPQ测试，代理GCC11.4 rel/san各231项CTest通过（228个GoogleTest+3个CLI），san临时detect_leaks=0，开关/完整日志无ASan/UBSan告警；clang-format/diff通过，clang-tidy补GCC路径退出0但有风格建议。覆盖短码步长、错维度同码长、独立解码参考、默认256、释放raw/Size、失败重试、查询/输出边界。未验证真实OOM/并发/TSan/泄漏。
+- 当前核心/记录未提交，无PQ CLI或真实数据Recall/QPS/整体压缩验收，不重跑既有长测；下一步用户提交后在当前PQ分支接入评测与同轮对照。阶段docs/validation/p3.md，取舍ADR-0017，学习面试表docs/learn/ivf-pq.md。Git写操作仍用户执行，生成结果不入库，P0严格Recall原记录不变。
