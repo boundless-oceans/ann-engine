@@ -100,3 +100,7 @@ add_test(NAME BenchCli.IVFNProbeSweep
 add_test(NAME BenchCli.SQ8NProbeSweep
     COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/bench_sq8_cli_test.cmake)
+
+add_test(NAME BenchCli.PQNProbeSweep
+    COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/bench_pq_cli_test.cmake)

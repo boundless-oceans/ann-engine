@@ -43,6 +43,9 @@ namespace {
 struct Options {
     std::string index = "flat";
     std::string quantizer = "none";
+    size_t pq_m = 16;
+    size_t pq_ksub = 256;
+    bool pq_explicit = false;
     ann::HNSWParams hnsw;
     ann::IVFParams ivf;
     std::vector<size_t> nprobe_list;
@@ -76,7 +79,9 @@ void PrintUsage() {
         "  --ef-construction <int> HNSW build width (default 200)\n"
         "  --ef-search <int> HNSW search width (default 64)\n"
         "  --ef-search-list <ints> HNSW sweep, e.g. 16,32,64,128; build once\n"
-        "  --quantizer <name> IVF none | sq8 (default none); sq8 encodes residuals\n"
+        "  --quantizer <name> IVF none | sq8 | pq (default none); quantized modes use residuals\n"
+        "  --pq-m <int>      PQ subspace count (default 16), must divide dimension\n"
+        "  --pq-ksub <int>   PQ centers per subspace, 1..256 (default 256); training is 25 rounds\n"
         "  --nlist <int>     IVF cluster count (default 1024)\n"
         "  --nprobe <int>    IVF requested probe count (default 16)\n"
         "  --nprobe-list <ints> IVF sweep, e.g. 1,4,16; train/build once\n"
@@ -148,10 +153,21 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
                 return false;
             opt->quantizer = v;
             opt->ivf_explicit = true;
-            if (opt->quantizer != "none" && opt->quantizer != "sq8") {
-                std::fprintf(stderr, "error: quantizer must be none or sq8\n");
+            if (opt->quantizer != "none" && opt->quantizer != "sq8" && opt->quantizer != "pq") {
+                std::fprintf(stderr, "error: quantizer must be none, sq8 or pq\n");
                 return false;
             }
+        } else if (a == "--pq-m" || a == "--pq-ksub") {
+            const char* v = need_value(a.c_str());
+            if (v == nullptr)
+                return false;
+            size_t* target = a == "--pq-m" ? &opt->pq_m : &opt->pq_ksub;
+            if (!ParsePositive(v, target)) {
+                std::fprintf(stderr, "error: %s requires a positive integer\n", a.c_str());
+                return false;
+            }
+            opt->pq_explicit = true;
+            opt->ivf_explicit = true;
         } else if (a == "--m") {
             opt->hnsw_explicit = true;
             const char* v = need_value("--m");
@@ -303,6 +319,11 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
                      "nprobe/nprobe-list\n");
         return false;
     }
+    if ((opt->pq_explicit && opt->quantizer != "pq") ||
+        (opt->quantizer == "pq" && opt->pq_ksub > 256)) {
+        std::fprintf(stderr, "error: PQ options require --quantizer pq and pq-ksub<=256\n");
+        return false;
+    }
     if (!opt->data_dir.empty() && opt->metric != ann::Metric::L2) {
         std::fprintf(stderr, "error: SIFT official ground truth requires l2\n");
         return false;
@@ -384,7 +405,7 @@ int RunBenchmark(int argc, char** argv) {
         csv << "index,metric,n,dim,nq,k,M,Mmax0,ef_construction,ef_search,effective_ef_search,"
                "seed,warmup,runs,build_seconds,memory_bytes,recall,qps,mean_ms,p50_ms,p95_ms,p99_"
                "ms,max_ms,nlist,nprobe,effective_nprobe,kmeans_iters,quantizer,encoding,code_size,"
-               "lut_floats\n";
+               "lut_floats,pq_m,pq_ksub\n";
         csv << std::fixed << std::setprecision(9);
         csv.flush();
     }
@@ -408,14 +429,28 @@ int RunBenchmark(int argc, char** argv) {
         return 1;
     }
 
+    if (opt.quantizer == "pq" && (ds.dim % opt.pq_m != 0 || opt.pq_ksub > ds.n)) {
+        std::fprintf(stderr,
+                     "error: PQ requires dimension divisible by pq-m and base count >= pq-ksub\n");
+        return 1;
+    }
+
     // ---------------- 构建索引 ----------------
     std::unique_ptr<ann::Index> owned_index;
+    size_t code_size = 0, lut_floats = 0;
     if (opt.index == "hnsw") {
         owned_index = std::make_unique<ann::HNSWIndex>(ds.dim, opt.metric, opt.hnsw);
     } else if (opt.index == "ivf") {
         std::unique_ptr<ann::Quantizer> quantizer;
         if (opt.quantizer == "sq8") {
             quantizer = std::make_unique<ann::ScalarQuantizer>(ds.dim);
+        } else if (opt.quantizer == "pq") {
+            quantizer =
+                std::make_unique<ann::ProductQuantizer>(ds.dim, opt.pq_m, opt.pq_ksub, opt.seed);
+        }
+        if (quantizer) {
+            code_size = quantizer->CodeSize();
+            lut_floats = quantizer->LutSize();
         }
         owned_index =
             std::make_unique<ann::IVFIndex>(ds.dim, opt.metric, opt.ivf, std::move(quantizer));
@@ -503,9 +538,9 @@ int RunBenchmark(int argc, char** argv) {
         const auto dist_fn = ann::SelectDistFn(opt.metric);
         const bool simd = dist_fn == ann::L2SqrAVX2Four || dist_fn == ann::InnerProductAVX2Four;
         std::printf("cpu avx2/fma : %s/%s\n", cpu.avx2 ? "yes" : "no", cpu.fma ? "yes" : "no");
-        if (opt.quantizer == "sq8") {
+        if (opt.quantizer != "none") {
             std::printf("coarse fn    : %s\n", simd ? "AVX2Four" : "Scalar");
-            std::printf("candidate fn : SQ8 ADC (scalar)\n");
+            std::printf("candidate fn : %s ADC (scalar)\n", opt.quantizer == "pq" ? "PQ" : "SQ8");
         } else {
             std::printf("distance fn  : %s\n", simd ? "AVX2Four" : "Scalar");
         }
@@ -528,11 +563,15 @@ int RunBenchmark(int argc, char** argv) {
             std::printf("nprobe req/eff: %zu/%zu\n", value, std::min(value, opt.ivf.nlist));
             std::printf("kmeans iters : %zu\n", opt.ivf.kmeans_iters);
             std::printf("quantizer    : %s\n", opt.quantizer.c_str());
-            std::printf("encoding     : %s\n", opt.quantizer == "sq8" ? "residual" : "raw");
-            if (opt.quantizer == "sq8") {
-                std::printf("code bytes   : %zu per vector\n", ds.dim);
+            std::printf("encoding     : %s\n", opt.quantizer != "none" ? "residual" : "raw");
+            if (opt.quantizer != "none") {
+                std::printf("code bytes   : %zu per vector\n", code_size);
                 std::printf("LUT floats   : %zu per query, rebuilt for each nonempty list\n",
-                            ds.dim * 256);
+                            lut_floats);
+            }
+            if (opt.quantizer == "pq") {
+                std::printf("PQ m/ksub    : %zu/%zu\n", opt.pq_m, opt.pq_ksub);
+                std::printf("PQ training  : 25 rounds per subspace\n");
             }
         }
         std::printf("\n");
@@ -571,9 +610,9 @@ int RunBenchmark(int argc, char** argv) {
                 << (opt.index == "ivf" ? value : 0) << ','
                 << (opt.index == "ivf" ? std::min(value, opt.ivf.nlist) : 0) << ','
                 << (opt.index == "ivf" ? opt.ivf.kmeans_iters : 0) << ',' << opt.quantizer << ','
-                << (opt.quantizer == "sq8" ? "residual" : "raw") << ','
-                << (opt.quantizer == "sq8" ? ds.dim : 0) << ','
-                << (opt.quantizer == "sq8" ? ds.dim * 256 : 0) << '\n';
+                << (opt.quantizer != "none" ? "residual" : "raw") << ',' << code_size << ','
+                << lut_floats << ',' << (opt.quantizer == "pq" ? opt.pq_m : 0) << ','
+                << (opt.quantizer == "pq" ? opt.pq_ksub : 0) << '\n';
             csv.flush();
         }
         std::fflush(stdout);
