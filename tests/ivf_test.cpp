@@ -297,6 +297,7 @@ TEST(IVF, MemoryUsageIncludesOwnedArraysAndObject) {
 
 class TestQuantizer final : public ann::Quantizer {
 public:
+    size_t Dim() const override { return 1; }
     void Train(size_t, const float*) override {}
     size_t CodeSize() const override { return 1; }
     void Encode(const float*, uint8_t*) const override {}

@@ -12,6 +12,8 @@ namespace ann {
 class Quantizer {
 public:
     virtual ~Quantizer() = default;
+    // 原始向量维度；与CodeSize/LutSize一样由构造确定，训练不改变形状。
+    virtual size_t Dim() const = 0;
     virtual void Train(size_t n, const float* vecs) = 0;
     virtual size_t CodeSize() const = 0;
     virtual void Encode(const float* vec, uint8_t* code) const = 0;
@@ -29,6 +31,7 @@ public:
 class ScalarQuantizer final : public Quantizer {
 public:
     explicit ScalarQuantizer(size_t dim);
+    size_t Dim() const override { return dim_; }
     // 有限的连续 n×dim 矩阵，n>0；成功后才替换已有模型。
     // Train 不得与同实例的任何其他操作并发。
     void Train(size_t n, const float* vecs) override;
@@ -59,6 +62,7 @@ private:
 class ProductQuantizer final : public Quantizer {
 public:
     ProductQuantizer(size_t dim, size_t m, size_t ksub = 256, uint64_t seed = 42);
+    size_t Dim() const override { return dim_; }
     // n>=ksub；各子空间固定25轮KMeans，成功后才替换全部码本。
     void Train(size_t n, const float* vecs) override;
     size_t CodeSize() const override { return m_; }

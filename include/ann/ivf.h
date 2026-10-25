@@ -19,8 +19,8 @@ struct IVFParams {
     uint64_t seed = 42;
 };
 
-// L2 IVF：无量化器时存原向量，内置 SQ8 时编码相对所属中心的残差。
-// 先 Add 后 Build，成功构建后不再允许 Add；当前仅接受维度匹配的内置 SQ8。
+// L2 IVF：无量化器时存原向量，内置 SQ8/PQ 编码相对所属中心的残差。
+// 先 Add 后 Build，成功构建后不再允许 Add；仅接受维度匹配的内置量化器。
 class IVFIndex final : public Index {
 public:
     IVFIndex(size_t dim,
@@ -39,13 +39,15 @@ public:
     Metric GetMetric() const override { return metric_; }
     // 统计对象及成员数组申请容量，不含查询/构建工作区和分配器内部开销。
     size_t MemoryUsage() const override;
-    const char* Name() const override { return quantizer_ ? "IVFSQ8" : "IVFFlat"; }
+    const char* Name() const override;
 
     // 零值收敛到 1，超出 nlist 的值在查询时截断；每次查询读一次快照。
     void SetNProbe(size_t nprobe) noexcept;
     size_t GetNProbe() const noexcept;
 
 private:
+    enum class QuantizerKind : uint8_t { None, SQ8, PQ };
+
     size_t dim_;
     Metric metric_;
     IVFParams params_;
@@ -54,11 +56,13 @@ private:
     bool built_ = false;
     // 独立计数，量化构建释放原始 float 后仍保持 Size/ID 语义。
     size_t n_ = 0;
+    size_t code_size_ = 0;
+    QuantizerKind quantizer_kind_ = QuantizerKind::None;
     std::vector<float> centroids_;
     std::vector<uint32_t> list_offsets_;
     std::vector<uint32_t> list_ids_;
     std::vector<float> raw_vectors_;
-    // codes[id*dim+d] 保留原始 ID 语义；残差只在构建/查询局部缓冲中存在。
+    // codes[id*code_size+j] 保留原始 ID；残差只在构建/查询局部缓冲中存在。
     std::vector<uint8_t> codes_;
     std::unique_ptr<Quantizer> quantizer_;
 };
