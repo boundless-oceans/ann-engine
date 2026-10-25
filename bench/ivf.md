@@ -1,13 +1,13 @@
 # L2 IVF 与残差 SQ8 评测
 
-当前支持 IVFFlat 与残差 IVFSQ8，不支持 PQ 或内积。构建调用已有 KMeans 在全部添加数据上训练，尚无采样、SIMD 训练或训练并行；先用小规模确认行为，再扩大数据量。此处没有 P3 最终量化验收结论。
+当前支持 IVFFlat、残差 IVFSQ8 与 IVFPQ，仅支持L2。PQ参数、实测及当前未达标项见 [PQ评测](pq.md)。构建调用已有 KMeans 在全部添加数据上训练，尚无采样、SIMD 训练或训练并行；先用小规模确认行为，再扩大数据量。此处没有 P3 最终量化验收结论。
 
 ## 参数与统计口径
 
 | 参数 | 含义 |
 |---|---|
 | --index ivf | 选择 IVF；默认无量化器，程序默认索引仍为 Flat |
-| --quantizer | none（默认）或 sq8，仅适用 IVF；sq8 编码残差 |
+| --quantizer | none（默认）、sq8或pq，仅适用IVF；量化模式编码残差 |
 | --nlist | 粗簇数，默认1024，必须不超过实际加载的base条数 |
 | --kmeans-iters | 训练迭代次数，默认25 |
 | --nprobe | 请求探测的列表数，默认16 |
@@ -21,7 +21,7 @@ IVF 专用参数只允许用于 --index ivf，HNSW 参数不能用于 IVF。新�
 
 合成数据和截断库使用独立 Flat 重算严格 ID 答案；完整 SIFT 使用官方 groundtruth。不得把 IVF 自身输出当作参考。nprobe=nlist 消除粗路由遗漏，但平局选择仍可能与官方答案不同；P0 的严格 Recall 决定和原未达1.0记录保留。
 
-CSV 保留既有27列的名称和顺序，末尾追加 quantizer,encoding,code_size,lut_floats，合计31列。此前的 nlist,nprobe,effective_nprobe,kmeans_iters 仍在原位置。非IVF的这些IVF数值列为0，IVF的HNSW参数列为0。量化元数据分别为none/raw/0/0或sq8/residual/dim/(256×dim)，code_size单位为字节，lut_floats是float个数。已有按列名读取的HNSW绘图仍可用，固定列数读取器需要适配31列。不修改历史CSV。
+CSV保留既有31列，末尾追加pq_m,pq_ksub，合计33列；此前新增的quantizer,encoding,code_size,lut_floats保持位置。此前的 nlist,nprobe,effective_nprobe,kmeans_iters 仍在原位置。非IVF的这些IVF数值列为0，IVF的HNSW参数列为0。量化元数据为none/raw/0/0、sq8/residual/dim/(256×dim)或pq/residual/m/(m×ksub)，code_size单位为字节，lut_floats是float个数；非PQ的pq_m/pq_ksub为0。已有按列名读取的HNSW绘图仍可用，固定列数读取器需要适配33列。不修改历史CSV。
 
 ## 构建与复现
 
@@ -163,7 +163,10 @@ done
 
 此前IVFFlat入口阶段 rel/san各172项CTest通过（170项GoogleTest+2项CLI）；san临时detect_leaks=0，完整日志无ASan/UBSan告警。新增CLI检查覆盖只构建一次、CSV参数、独立参考、重复参数点、全探测/超范围截断、单值与扫描、格式/互斥/错误索引和默认Flat兼容。原HNSW扫描检查已适配新增CSV列并通过。
 
-IVFFlat真实子集与SQ8起步对照已完成。下一步提交本轮入口/记录后，可将SQ8功能分支合回P3集成分支，再准备PQ；SQ8速度优化应先分解成本，不在本轮静默改训练或残差方案。学习/面试笔记在本机 docs/learn/ivf-benchmark.md，阶段验证见 docs/validation/p3.md。
+IVFFlat与SQ8起步阶段已提交并合回P3；当前PQ入口和子集探索见[pq.md](pq.md)，精度目标仍未达。SQ8速度优化应先分解成本，不静默改训练或残差方案。学习/面试笔记在本机 docs/learn/ivf-benchmark.md，阶段验证见 docs/validation/p3.md。
 
 
 2026-10-25的SQ8入口新增1项CLI检查，全量rel/san各202项通过（199个GoogleTest+3个CLI），san临时detect_leaks=0，完整日志无ASan/UBSan告警。三套CLI检查通过，覆盖SQ8扫描/独立参考/元数据/内存降低/重复与单值一致/非法参数，默认Flat及原IVF/HNSW保持可用。本轮不改核心算法，后续是否优化SQ8逐列表建表应先定位成本；当前作为正确性与容量基线保留，再推进PQ，不能声称SQ8速度验收已达成。学习与面试表在本机docs/learn/sq8-benchmark.md。
+
+
+PQ入口和子集起步探索现已完成，详见[pq.md](pq.md)。rel/san各232项CTest通过，本轮san关闭泄漏检查，日志无ASan/UBSan告警。本轮PQ工作点未达到严格Recall0.90，不能因为容量已下降就宣称P3验收通过；当前重点转向量化误差与工作点诊断，原SQ8/IVFFlat记录保留。

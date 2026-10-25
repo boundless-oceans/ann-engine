@@ -303,3 +303,14 @@
 - IVF统一比较Dim而非CodeSize，缓存实际码长作为代码分配/ID寻址步长；内置SQ8/PQ分别报告IVFSQ8/IVFPQ，默认IVFFlat保留。仍限制为内置支持类型，不依赖Name字符串。沿用既定残差x-c训练/编码、q-c逐列表LUT，候选不加粗距离；成功释放raw、Size独立计数，失败不发布结构、可补样本重试。
 - 新增13项IVFPQ测试，代理GCC11.4 rel/san各231项CTest通过（228个GoogleTest+3个CLI），san临时detect_leaks=0，开关/完整日志无ASan/UBSan告警；clang-format/diff通过，clang-tidy补GCC路径退出0但有风格建议。覆盖短码步长、错维度同码长、独立解码参考、默认256、释放raw/Size、失败重试、查询/输出边界。未验证真实OOM/并发/TSan/泄漏。
 - 当前核心/记录未提交，无PQ CLI或真实数据Recall/QPS/整体压缩验收，不重跑既有长测；下一步用户提交后在当前PQ分支接入评测与同轮对照。阶段docs/validation/p3.md，取舍ADR-0017，学习面试表docs/learn/ivf-pq.md。Git写操作仍用户执行，生成结果不入库，P0严格Recall原记录不变。
+
+
+### PQ 评测入口与未达标基线（2026-10-25）
+
+- 用户已提交核心8ec6300/371cefc，当前feat/p3-pq。已接入--quantizer pq、--pq-m默认16、--pq-ksub默认256；严格正整数/PQ专属/维度整除/样本>=ksub验证。粗--kmeans-iters与PQ固定25轮分开。CSV保留31列，追加pq_m,pq_ksub至33列，码长/LUT取真实对象。核心算法本轮不变。
+- rel/san各232项CTest通过（228个GoogleTest+4个CLI），旧CLI适配33列且新增PQ CLI通过；san临时detect_leaks=0，完整日志无ASan/UBSan告警，clang-format/diff通过。本机日志/tmp/ann-p3-pq-bench-rel.log和/tmp/ann-p3-pq-bench-san.log。
+- 原始目录data/p3-results/pq-sift10k-q100-lr8jqz5q。SIFT前10000条×128维、原前100查询、L2/k10/seed42、粗5/PQ25轮/ksub256、warmup1/runs3，独立Flat重算截断库严格ID参考。nlist32跑none/SQ8/PQ16/PQ32，精度不足后探索nlist128/256的none/PQ32，8进程退出0，命令/摘要/环境/完整输出CSV保留，原数据未改。
+- 环境i7-14650HX16核/24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo、单线程CPU0、powersave/允许Turbo/接电，粗AVX2Four、量化标量ADC；电源模式未确认、频率/温度/背景负载未完整采样，无随机化/置信区间/独立调参集。只100查询，不外推百万库，容量非RSS/峰值。
+- 重要负结果：nlist32 PQ16/PQ32全探测Recall0.765/0.830，容量比14.88/10.19；nlist128/256 PQ32全探测Recall0.847/0.856，容量比9.38/8.49。本轮未找到同时容量比>=8和严格Recall>=0.90工作点，P3仍未达标，不抹去失败结果或改验收标准。
+- 既有Faiss Python诊断：1.12.0/NumPy2.2.6/AVX2、OMP1/CPU0、同规模m32/ksub256残差、粗5/PQ25/配置seed42，全探测nlist32/256、max_codes0，独立Faiss Flat参考，Recall0.835/0.845；仅准确率诊断，无QPS对比、中心/平局不保证相同，不能证明自研无缺陷或胜过Faiss。脚本/配置/结果在原始目录，未下载依赖。
+- 入口和记录当前未提交，bench/pq.md保存完整协议/结果/局限，学习表docs/learn/pq-benchmark.md，阶段docs/validation/p3.md。下一步用户提交后先做重建误差/排名变化诊断，再评估训练/量化策略；不要直接宣布P3通过或静默加原向量重排/更改目标。Git写操作仍用户执行，运行产物不入库。
