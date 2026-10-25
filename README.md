@@ -7,7 +7,7 @@
 从零实现的高性能 ANN 检索引擎（C++20）。**手写** HNSW / IVF 索引与 PQ/SQ 量化，
 不依赖 Faiss 等现成库，并与 Faiss 做性能对照。
 
-> **状态：P1/P2 已完成并合回 main，P3 已完成 IVFFlat 起步验证，正在推进 SQ8，P0 原验收差异保留** —— Ubuntu 上 rel 构建的 27 个测试已通过，合成数据评测已跑通；
+> **状态：P1/P2 已完成并合回 main，P3 已完成 SQ8 起步对照，正在推进 PQ，P0 原验收差异保留** —— Ubuntu 上 rel 构建的 27 个测试已通过，合成数据评测已跑通；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；全量 SIFT1M 严格 Recall@10=0.999300，
 > 70 条差异已确认为同距离点的不同选择。保留严格指标与原验收标准，尚未达到 1.0。
 
@@ -47,7 +47,7 @@
 | P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
 | P1 | SIMD 距离 + 内存池 | ✅ 已完成集成验证并合回 main，记录见下文 |
 | P2 | HNSW | ✅ 全量曲线、同轮Python Faiss对照及本机验收通过，已合回 main |
-| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 与 IVF 残差查询已实现；SQ8 评测起步对照已完成，PQ 待推进 |
+| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 与 IVF 残差查询已实现；SQ8 起步对照已完成，独立 PQ 已实现；IVF-PQ 与验收待推进 |
 | P4 | 持久化 + 崩溃恢复 | ⬜ 未开始 |
 | P5 | 服务化（gRPC / HTTP） | ⬜ 未开始 |
 | P6 | 差异化（过滤检索 / GPU 批量距离 / 删除） | ⬜ 未开始 |
@@ -409,3 +409,10 @@ SIFT1M（1M × 128d）。**不入库**（体积大），获取方式见 [data/RE
 `ann_bench --index ivf --quantizer sq8`选择残差量化，默认none保持IVFFlat。CSV追加量化/编码/LUT元数据至31列，既有列名和顺序保留。rel/san各202项测试通过，本轮san关闭泄漏检查，无ASan/UBSan告警。
 
 在同轮SIFT10k库、前100条查询对照中，SQ8索引申请容量从5176732降至1337828字节（约3.87倍），但查询显著变慢，召回略降；这不是压缩带来加速的结果。完整环境、nprobe曲线、复现命令及适用范围见 [IVF与SQ8评测](bench/ivf.md)。没有全量SIFT1M、Faiss SQ8或P3最终量化验收结论。
+
+
+### 独立 PQ 量化器（2026-10-25）
+
+当前 `feat/p3-pq` 实现独立 `ProductQuantizer`，按总设计将dim等分为m段，各段用已有KMeans固定25轮训练，码本默认256中心，每段编码一个字节；不整除或ksub超出1–256时拒绝。支持编解码和调用方LUT的平方L2 ADC，查询不量化，模型不保存查询缓冲。距离double累加后检查float范围，LUT先检查再填表，两遍计算是当前正确性基线的成本。
+
+新增16项测试，rel/san各218项通过，本轮san关闭泄漏检查，无ASan/UBSan告警。此块尚未接入IVF或ann_bench，没有PQ召回、训练速度、整体压缩率或P3最终验收结论。128维/m16的理论编码载荷32倍压缩不包含码本、列表和查询工作区。学习与面试表在本机 `docs/learn/pq.md`，阶段验证见 [P3验证](docs/validation/p3.md)。

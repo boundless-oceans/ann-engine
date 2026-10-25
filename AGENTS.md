@@ -9,7 +9,7 @@
 
 **ann-engine** —— 从零手写的高性能 ANN（近似最近邻）检索引擎，C++20，不依赖 Faiss。
 
-> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 功能分支推进独立 SQ8；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
+> **P1/P2 已由用户提交并合回 main（045f26b），当前 P3 功能分支推进独立 PQ；保留 P0 原验收未达成记录。** P0 实现已写完（`src/distance.cpp` · `src/flat.cpp`），
 > 已由用户在 Ubuntu 上完成 rel 构建，27 个测试全部通过，合成数据评测已跑通；
 > 全量 SIFT1M 已测得 Recall@10=0.999300，尚未达到 1.0；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；70 条召回差异已确认为同距离点的不同选择。
@@ -286,3 +286,12 @@
 - 同轮SIFT前10000条/128维、原查询前100条、L2/k10/nlist32/iters5/seed42/nprobe1,4,16,32，预热1/正式3轮，先IVFFlat后SQ8，两进程退出0。原始目录data/p3-results/sq8-sift10k-q100-ejxigkwi，包含命令/环境/CMakeCache/数据源码二进制摘要/完整输出CSV/查询前缀视图；base链接原完整文件，查询参考仅复制前100条，max-base清除官方参考并独立重算Flat。未改原数据。
 - 环境i7-14650HX16核/24CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo、单线程CPU0、powersave/允许Turbo/接电；电源模式未确认，实际频率/温度/背景负载未完整采样，未随机化顺序/置信区间。申请容量5176732->1337828字节（约3.87倍），但SQ8明显变慢，nprobe16/32的严格Recall从1.000到0.989。详细数值bench/ivf.md；不是RSS/峰值，100查询不与历史10000查询耗时直接相除。
 - 已知逐非空列表建表和标量ADC存在成本，但尚无perf/阶段计时，不把全部慢归因于已证明瓶颈；不宣称压缩带来加速或P3最终验收达成。学习面试表docs/learn/sq8-benchmark.md，阶段docs/validation/p3.md。当前入口/记录未提交，下一步用户提交后可将SQ8合回P3，再准备PQ；若优化SQ8，应先定位成本，不静默改残差策略或公开接口。Git写操作用户执行，CSV/日志继续不入库。
+
+
+### P3 独立 PQ（2026-10-25）
+
+- 用户已将SQ8合回P3集成分支（d156cce），已创建feat/p3-pq，起始干净。当前新增独立ProductQuantizer，公开签名沿用总设计，源码src/product_quantizer.cpp，未改IVF/CLI。
+- dim必须整除m，1<=ksub<=256，n>=ksub；每段一个uint8，不位打包；ksub256的码字255合法，小ksub先验证code范围。码本[s][c][d]、LUT[s][c]。逐段复用单段训练矩阵和既有KMeans固定25轮，种子seed+s（uint64模加）；每次Train重置到配置种子，同环境可复现，不保证跨标准库/libm逐位一致。全部训练成功后swap提交，失败保留旧模型。
+- Encode最近double L2、等距低码字；Decode拼接，ADC保留原查询、float LUT/double累加。BuildLUT两遍检查/填表避免失败留下半张表且不内部分配，代价是重复距离计算。查询方法const不改成员、缓冲调用方提供且输入输出不重叠；Train不与同实例其他操作并发。
+- 新增16项测试，代理GCC11.4 rel/san各218项CTest通过（215个GoogleTest+3个CLI），san临时detect_leaks=0，完整日志无ASan/UBSan告警；clang-format/diff通过，clang-tidy补GCC路径退出0仍有风格建议。无真实OOM/并发/TSan/泄漏验证。阶段docs/validation/p3.md，取舍ADR-0016，学习面试表docs/learn/pq.md。
+- 仅独立PQ，尚无IVF-PQ/CLI/真实数据性能/召回/整体压缩验收；理论载荷比不能代替P3目标。IVF当前仍只接受内置匹配维度SQ8；PQ CodeSize=m不等于Dim，后续接入需明确安全形状校验，不静默加公开Dim/Clone。当前实现/记录未提交；用户提交后继续同一PQ分支接入残差流程，Git写操作用户执行。
