@@ -54,5 +54,34 @@ private:
     bool trained_ = false;
 };
 
+// 等长连续子空间的乘积量化；每段存一个字节，不做小于8位的位打包。
+// 输入/输出缓冲不得重叠，容量由调用方保证；训练不得与同实例其他操作并发。
+class ProductQuantizer final : public Quantizer {
+public:
+    ProductQuantizer(size_t dim, size_t m, size_t ksub = 256, uint64_t seed = 42);
+    // n>=ksub；各子空间固定25轮KMeans，成功后才替换全部码本。
+    void Train(size_t n, const float* vecs) override;
+    size_t CodeSize() const override { return m_; }
+    // 每段选择最近L2中心，等距取较小码字ID。
+    void Encode(const float* vec, uint8_t* code) const override;
+    void Decode(const uint8_t* code, float* vec) const override;
+    // lut[s*ksub+c]=原始查询子空间到码字c的平方L2；失败时不写半张表。
+    void BuildLUT(const float* query, float* lut) const override;
+    size_t LutSize() const override { return m_ * ksub_; }
+    float DistanceFromLUT(const float* lut, const uint8_t* code) const override;
+    size_t MemoryUsage() const override;
+    const char* Name() const override { return "PQ"; }
+
+private:
+    void RequireTrained() const;
+    void CheckCodes(const uint8_t* code) const;
+
+    size_t dim_, m_, dsub_, ksub_;
+    uint64_t seed_;
+    bool trained_ = false;
+    // 连续布局[s][c][d]，共m×ksub×dsub=ksub×dim个float。
+    std::vector<float> codebooks_;
+};
+
 }  // namespace ann
 #endif  // ANN_QUANTIZER_H

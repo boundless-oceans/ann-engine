@@ -19,6 +19,7 @@ add_library(ann_core
     memory_pool.cpp     # 对齐分配与构建期内存池
     kmeans.cpp          # IVF/PQ 共用的 L2 聚类训练器
     quantizer.cpp       # SQ8：每维范围训练、编解码与调用方 LUT
+    product_quantizer.cpp # PQ：子空间码本训练、编解码与 ADC
 
     # ---- 索引层 ----
     flat.cpp            # FlatIndex：暴力检索 / ground-truth 生成器
