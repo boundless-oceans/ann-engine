@@ -18,6 +18,7 @@ add_library(ann_core
     distance_avx2.cpp   # AVX2 + FMA 单/四累加器，函数级指令集隔离
     memory_pool.cpp     # 对齐分配与构建期内存池
     kmeans.cpp          # IVF/PQ 共用的 L2 聚类训练器
+    quantizer.cpp       # SQ8：每维范围训练、编解码与调用方 LUT
 
     # ---- 索引层 ----
     flat.cpp            # FlatIndex：暴力检索 / ground-truth 生成器
@@ -29,7 +30,6 @@ add_library(ann_core
     ivf.cpp             # IVF：未量化 L2 训练、构建和 nprobe 查询
 
     # ---- 尚未实现的模块：实现时取消注释，并加入上面的源文件列表 ----
-    # quantizer.cpp     标量量化 / 乘积量化（SQ / PQ）
     # storage.cpp       索引序列化与加载
     # wal.cpp           预写日志与崩溃恢复
 )

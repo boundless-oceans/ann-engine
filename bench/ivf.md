@@ -1,12 +1,13 @@
-# 未量化 L2 IVF 评测
+# L2 IVF 与残差 SQ8 评测
 
-当前支持 IVFFlat，不支持 SQ/PQ 或内积。构建调用已有 KMeans 在全部添加数据上训练，尚无采样、SIMD 训练或训练并行；先用小规模确认行为，再扩大数据量。此处没有 P3 最终量化验收结论。
+当前支持 IVFFlat 与残差 IVFSQ8，不支持 PQ 或内积。构建调用已有 KMeans 在全部添加数据上训练，尚无采样、SIMD 训练或训练并行；先用小规模确认行为，再扩大数据量。此处没有 P3 最终量化验收结论。
 
 ## 参数与统计口径
 
 | 参数 | 含义 |
 |---|---|
-| --index ivf | 选择 IVFFlat；默认仍为 Flat |
+| --index ivf | 选择 IVF；默认无量化器，程序默认索引仍为 Flat |
+| --quantizer | none（默认）或 sq8，仅适用 IVF；sq8 编码残差 |
 | --nlist | 粗簇数，默认1024，必须不超过实际加载的base条数 |
 | --kmeans-iters | 训练迭代次数，默认25 |
 | --nprobe | 请求探测的列表数，默认16 |
@@ -20,7 +21,7 @@ IVF 专用参数只允许用于 --index ivf，HNSW 参数不能用于 IVF。新�
 
 合成数据和截断库使用独立 Flat 重算严格 ID 答案；完整 SIFT 使用官方 groundtruth。不得把 IVF 自身输出当作参考。nprobe=nlist 消除粗路由遗漏，但平局选择仍可能与官方答案不同；P0 的严格 Recall 决定和原未达1.0记录保留。
 
-CSV 保留原有23列的名称和顺序，末尾追加 nlist,nprobe,effective_nprobe,kmeans_iters，合计27列。Flat/HNSW 的新增四列为0，IVF 的HNSW参数列为0。已有按列名读取的 HNSW 绘图工具可继续使用；自行编写的固定列数读取器需要适配27列。不修改历史CSV。
+CSV 保留既有27列的名称和顺序，末尾追加 quantizer,encoding,code_size,lut_floats，合计31列。此前的 nlist,nprobe,effective_nprobe,kmeans_iters 仍在原位置。非IVF的这些IVF数值列为0，IVF的HNSW参数列为0。量化元数据分别为none/raw/0/0或sq8/residual/dim/(256×dim)，code_size单位为字节，lut_floats是float个数。已有按列名读取的HNSW绘图仍可用，固定列数读取器需要适配31列。不修改历史CSV。
 
 ## 构建与复现
 
@@ -101,8 +102,68 @@ taskset -c 0 ./build-rel/bin/ann_bench \
   > "$ivf_subset_dir/ivf-console.txt" 2> "$ivf_subset_dir/ivf-progress.txt"
 ```
 
+## 残差 SQ8 同轮起步对照（2026-10-25）
+
+基于ff402cf及本轮评测入口改动，先IVFFlat再IVFSQ8，均为SIFT原始base前10000条×128维，仅使用原始查询前100条。nlist32、kmeans_iters5、seed42、L2/k10，nprobe1/4/16/32。每模式构建一次，各点预热1/正式3轮，另跑一轮召回；两进程退出0。查询工作区分配、逐列表LUT重建与ADC均计入SQ8耗时。SQ8粗路由后端为AVX2Four，候选为标量ADC，不能把它标成全程AVX2距离内核。
+
+原始目录data/p3-results/sq8-sift10k-q100-ejxigkwi，保存context、CPU/编译器/系统、CMakeCache、源码差异与源码/二进制/数据SHA256、命令、阶段前后环境、完整输出/CSV。workload子目录通过符号链接读取原始完整base，只复制查询/参考文件的前100条；--max-base 10000触发加载器丢弃官方答案，双方都在当前子集上独立Flat重算严格ID参考。没有修改原始数据文件；前缀官方参考仅用于加载器条数匹配，不用于本次Recall。
+
+环境：i7-14650HX，16物理核/24逻辑CPU，Ubuntu22.04、GCC11.4、RelWithDebInfo；单线程CPU0，阶段快照powersave、允许Turbo、接电，2026-10-25 20:39:35–20:39:41（UTC+8）。电源模式未确认，实际频率/温度及背景负载未完整采样，记录了边界loadavg；未随机化顺序、重复建模或统计置信区间。这是100查询的起步观测，不能与前一天10000查询的QPS直接相除。
+
+| nprobe | IVFFlat严格Recall | IVFSQ8严格Recall | IVFFlat QPS | IVFSQ8 QPS | IVFFlat P99 ms | IVFSQ8 P99 ms |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.605000 | 0.603000 | 122528.7 | 7830.6 | 0.014461 | 0.182224 |
+| 4 | 0.931000 | 0.923000 | 38111.0 | 2030.8 | 0.044007 | 0.582659 |
+| 16 | 1.000000 | 0.989000 | 10560.9 | 527.7 | 0.125931 | 2.087934 |
+| 32 | 1.000000 | 0.989000 | 5070.6 | 257.7 | 0.256832 | 3.979110 |
+
+IVFFlat构建0.221783s、索引申请容量5176732字节；IVFSQ8构建0.189911s、1337828字节。容量比约3.87，编码载荷本身为4倍；总体还包括列表/中心/模型/对象。不是进程RSS或构建峰值，加载器仍保留数据集、构建阶段还有残差临时矩阵。本轮构建耗时单次观测不能说明SQ8训练更快。
+
+SQ8本轮节省索引容量，但没有查询加速，严格召回略降。全探测消除了漏簇，仍保留量化误差，因此不要求SQ8 Recall为1。已知实现每个非空探测簇建256×dim表并逐候选标量ADC，128维LUT为32768个float（128KiB），同查询复用一块缓冲但仍重复计算表；尚无阶段计时/perf，不能把全部耗时差直接归因于建表或缓存瓶颈。未静默改算法来美化结果，也不据此宣称压缩带来加速。PQ≥8倍/Recall≥0.90的P3最终目标尚未验收。
+
+复现相同查询前缀（先按前文保存测量环境，需原始完整SIFT文件）：
+
+```bash
+mkdir -p data/p3-results
+sq8_result_dir=$(mktemp -d "$PWD/data/p3-results/sq8-compare-XXXXXX")
+python3 - "$sq8_result_dir" <<'PYDATA'
+from pathlib import Path
+import struct
+import sys
+root = Path.cwd()
+view = Path(sys.argv[1]) / "workload"
+view.mkdir()
+base = root / "data/sift_base.fvecs"
+with base.open("rb") as source:
+    dim = struct.unpack("<i", source.read(4))[0]
+assert dim > 0 and base.stat().st_size // (4 * (dim + 1)) > 10000
+(view / "sift_base.fvecs").symlink_to(base)
+for name in ("sift_query.fvecs", "sift_groundtruth.ivecs"):
+    with (root / "data" / name).open("rb") as source:
+        width = struct.unpack("<i", source.read(4))[0]
+        assert width > 0
+        source.seek(0)
+        payload = source.read(100 * 4 * (width + 1))
+        assert len(payload) == 100 * 4 * (width + 1)
+    (view / name).write_bytes(payload)
+PYDATA
+for mode in none sq8; do
+  taskset -c 0 ./build-rel/bin/ann_bench \
+    --index ivf --quantizer "$mode" --data "$sq8_result_dir/workload" \
+    --max-base 10000 --nlist 32 --kmeans-iters 5 --nprobe-list 1,4,16,32 \
+    --k 10 --metric l2 --seed 42 --warmup 1 --runs 3 \
+    --csv "$sq8_result_dir/$mode.csv" \
+    > "$sq8_result_dir/$mode-console.txt" 2> "$sq8_result_dir/$mode-progress.txt"
+done
+```
+
+需完整查询时使用原data目录；--nq不截断--data查询，不应误以为加--nq 100就只测100条。没有必要为了复现起步记录立即启动全量10000查询或百万库长测。生成文件仍不入库。
+
 ## 验证与后续
 
-本轮 rel/san各172项CTest通过（170项GoogleTest+2项CLI）；san临时detect_leaks=0，完整日志无ASan/UBSan告警。新增CLI检查覆盖只构建一次、CSV参数、独立参考、重复参数点、全探测/超范围截断、单值与扫描、格式/互斥/错误索引和默认Flat兼容。原HNSW扫描检查已适配新增CSV列并通过。
+此前IVFFlat入口阶段 rel/san各172项CTest通过（170项GoogleTest+2项CLI）；san临时detect_leaks=0，完整日志无ASan/UBSan告警。新增CLI检查覆盖只构建一次、CSV参数、独立参考、重复参数点、全探测/超范围截断、单值与扫描、格式/互斥/错误索引和默认Flat兼容。原HNSW扫描检查已适配新增CSV列并通过。
 
-真实子集的nprobe起步测量已完成。下一步提交本轮记录后，可将IVFFlat功能分支合回P3集成分支，再准备SQ8功能分支；大规模训练采样/加速仍需后续证据和设计确认，不在本轮中静默加入。学习/面试笔记在本机 docs/learn/ivf-benchmark.md，阶段验证见 docs/validation/p3.md。
+IVFFlat真实子集与SQ8起步对照已完成。下一步提交本轮入口/记录后，可将SQ8功能分支合回P3集成分支，再准备PQ；SQ8速度优化应先分解成本，不在本轮静默改训练或残差方案。学习/面试笔记在本机 docs/learn/ivf-benchmark.md，阶段验证见 docs/validation/p3.md。
+
+
+2026-10-25的SQ8入口新增1项CLI检查，全量rel/san各202项通过（199个GoogleTest+3个CLI），san临时detect_leaks=0，完整日志无ASan/UBSan告警。三套CLI检查通过，覆盖SQ8扫描/独立参考/元数据/内存降低/重复与单值一致/非法参数，默认Flat及原IVF/HNSW保持可用。本轮不改核心算法，后续是否优化SQ8逐列表建表应先定位成本；当前作为正确性与容量基线保留，再推进PQ，不能声称SQ8速度验收已达成。学习与面试表在本机docs/learn/sq8-benchmark.md。

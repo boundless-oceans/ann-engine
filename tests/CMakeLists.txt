@@ -55,6 +55,8 @@ add_executable(ann_tests
     kmeans_test.cpp       # 聚类初始化、均值、空簇与输入边界
     ivf_lists_test.cpp    # CSR 偏移、空列表及原始 ID 完整性
     ivf_test.cpp          # 静态构建、nprobe 查询与独立精确参考
+    scalar_quantizer_test.cpp # SQ8：范围、常量维、编解码误差与独立 ADC 参考
+    ivf_sq8_test.cpp      # 残差 SQ8：逐列表 LUT、解码参考与释放原始存储
 )
 
 # 测试私有纯选择函数，不把模拟 CPU 特性的入口暴露为公共 API。
@@ -92,3 +94,7 @@ add_test(NAME BenchCli.EfSearchSweep
 add_test(NAME BenchCli.IVFNProbeSweep
     COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/bench_ivf_cli_test.cmake)
+
+add_test(NAME BenchCli.SQ8NProbeSweep
+    COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/bench_sq8_cli_test.cmake)

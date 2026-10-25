@@ -25,6 +25,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "dataset.h"
@@ -41,6 +42,7 @@ namespace {
 
 struct Options {
     std::string index = "flat";
+    std::string quantizer = "none";
     ann::HNSWParams hnsw;
     ann::IVFParams ivf;
     std::vector<size_t> nprobe_list;
@@ -74,6 +76,7 @@ void PrintUsage() {
         "  --ef-construction <int> HNSW build width (default 200)\n"
         "  --ef-search <int> HNSW search width (default 64)\n"
         "  --ef-search-list <ints> HNSW sweep, e.g. 16,32,64,128; build once\n"
+        "  --quantizer <name> IVF none | sq8 (default none); sq8 encodes residuals\n"
         "  --nlist <int>     IVF cluster count (default 1024)\n"
         "  --nprobe <int>    IVF requested probe count (default 16)\n"
         "  --nprobe-list <ints> IVF sweep, e.g. 1,4,16; train/build once\n"
@@ -139,6 +142,16 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
             if (v == nullptr)
                 return false;
             opt->index = v;
+        } else if (a == "--quantizer") {
+            const char* v = need_value("--quantizer");
+            if (v == nullptr)
+                return false;
+            opt->quantizer = v;
+            opt->ivf_explicit = true;
+            if (opt->quantizer != "none" && opt->quantizer != "sq8") {
+                std::fprintf(stderr, "error: quantizer must be none or sq8\n");
+                return false;
+            }
         } else if (a == "--m") {
             opt->hnsw_explicit = true;
             const char* v = need_value("--m");
@@ -370,7 +383,8 @@ int RunBenchmark(int argc, char** argv) {
         csv.open(opt.csv_path);
         csv << "index,metric,n,dim,nq,k,M,Mmax0,ef_construction,ef_search,effective_ef_search,"
                "seed,warmup,runs,build_seconds,memory_bytes,recall,qps,mean_ms,p50_ms,p95_ms,p99_"
-               "ms,max_ms,nlist,nprobe,effective_nprobe,kmeans_iters\n";
+               "ms,max_ms,nlist,nprobe,effective_nprobe,kmeans_iters,quantizer,encoding,code_size,"
+               "lut_floats\n";
         csv << std::fixed << std::setprecision(9);
         csv.flush();
     }
@@ -399,7 +413,12 @@ int RunBenchmark(int argc, char** argv) {
     if (opt.index == "hnsw") {
         owned_index = std::make_unique<ann::HNSWIndex>(ds.dim, opt.metric, opt.hnsw);
     } else if (opt.index == "ivf") {
-        owned_index = std::make_unique<ann::IVFIndex>(ds.dim, opt.metric, opt.ivf);
+        std::unique_ptr<ann::Quantizer> quantizer;
+        if (opt.quantizer == "sq8") {
+            quantizer = std::make_unique<ann::ScalarQuantizer>(ds.dim);
+        }
+        owned_index =
+            std::make_unique<ann::IVFIndex>(ds.dim, opt.metric, opt.ivf, std::move(quantizer));
     } else {
         owned_index = std::make_unique<ann::FlatIndex>(ds.dim, opt.metric);
     }
@@ -484,7 +503,12 @@ int RunBenchmark(int argc, char** argv) {
         const auto dist_fn = ann::SelectDistFn(opt.metric);
         const bool simd = dist_fn == ann::L2SqrAVX2Four || dist_fn == ann::InnerProductAVX2Four;
         std::printf("cpu avx2/fma : %s/%s\n", cpu.avx2 ? "yes" : "no", cpu.fma ? "yes" : "no");
-        std::printf("distance fn  : %s\n", simd ? "AVX2Four" : "Scalar");
+        if (opt.quantizer == "sq8") {
+            std::printf("coarse fn    : %s\n", simd ? "AVX2Four" : "Scalar");
+            std::printf("candidate fn : SQ8 ADC (scalar)\n");
+        } else {
+            std::printf("distance fn  : %s\n", simd ? "AVX2Four" : "Scalar");
+        }
         std::printf("data source  : %s\n", synthetic ? "synthetic" : opt.data_dir.c_str());
         std::printf("base         : %zu x %zu\n", ds.n, ds.dim);
         std::printf("queries      : %zu\n", ds.nq);
@@ -503,6 +527,13 @@ int RunBenchmark(int argc, char** argv) {
             std::printf("nlist        : %zu\n", opt.ivf.nlist);
             std::printf("nprobe req/eff: %zu/%zu\n", value, std::min(value, opt.ivf.nlist));
             std::printf("kmeans iters : %zu\n", opt.ivf.kmeans_iters);
+            std::printf("quantizer    : %s\n", opt.quantizer.c_str());
+            std::printf("encoding     : %s\n", opt.quantizer == "sq8" ? "residual" : "raw");
+            if (opt.quantizer == "sq8") {
+                std::printf("code bytes   : %zu per vector\n", ds.dim);
+                std::printf("LUT floats   : %zu per query, rebuilt for each nonempty list\n",
+                            ds.dim * 256);
+            }
         }
         std::printf("\n");
         std::printf("build time   : %.3f s\n", build_seconds);
@@ -539,7 +570,10 @@ int RunBenchmark(int argc, char** argv) {
                 << (opt.index == "ivf" ? opt.ivf.nlist : 0) << ','
                 << (opt.index == "ivf" ? value : 0) << ','
                 << (opt.index == "ivf" ? std::min(value, opt.ivf.nlist) : 0) << ','
-                << (opt.index == "ivf" ? opt.ivf.kmeans_iters : 0) << '\n';
+                << (opt.index == "ivf" ? opt.ivf.kmeans_iters : 0) << ',' << opt.quantizer << ','
+                << (opt.quantizer == "sq8" ? "residual" : "raw") << ','
+                << (opt.quantizer == "sq8" ? ds.dim : 0) << ','
+                << (opt.quantizer == "sq8" ? ds.dim * 256 : 0) << '\n';
             csv.flush();
         }
         std::fflush(stdout);
