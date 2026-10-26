@@ -314,3 +314,11 @@
 - 重要负结果：nlist32 PQ16/PQ32全探测Recall0.765/0.830，容量比14.88/10.19；nlist128/256 PQ32全探测Recall0.847/0.856，容量比9.38/8.49。本轮未找到同时容量比>=8和严格Recall>=0.90工作点，P3仍未达标，不抹去失败结果或改验收标准。
 - 既有Faiss Python诊断：1.12.0/NumPy2.2.6/AVX2、OMP1/CPU0、同规模m32/ksub256残差、粗5/PQ25/配置seed42，全探测nlist32/256、max_codes0，独立Faiss Flat参考，Recall0.835/0.845；仅准确率诊断，无QPS对比、中心/平局不保证相同，不能证明自研无缺陷或胜过Faiss。脚本/配置/结果在原始目录，未下载依赖。
 - 入口和记录当前未提交，bench/pq.md保存完整协议/结果/局限，学习表docs/learn/pq-benchmark.md，阶段docs/validation/p3.md。下一步用户提交后先做重建误差/排名变化诊断，再评估训练/量化策略；不要直接宣布P3通过或静默加原向量重排/更改目标。Git写操作仍用户执行，运行产物不入库。
+
+### PQ 重建/排名诊断（2026-10-26）
+
+- 用户已提交7094f49/de4ea6b，当前feat/p3-pq。本轮新增独立ann_pq_diag和1项手算网格CTest，核心/公开接口不变；固定SIFT前10000×128/前100查询、k10、ksub256/m32、粗5/PQ25/seed42，全探测nlist32/256。分解公开KMeans/PQ流程绕过IVF列表/寻址/结果堆，并比较double解码距离；共用训练器/编码器，不证明所有输入无缺陷。
+- IVF/穷举ADC各1000位置的ID和float距离均一致，ADC与double解码top-10位置差异均0；全部100万配对距离最大相对误差7.87e-8/8.06e-8，严格Recall仍0.830/0.856。残差重建MSE/坐标30.1862/27.7642，丢失170/144个精确近邻平均ADC名次14.56/14.15，最差46/38，支持当前量化排序损失解释。未加入原向量重排，工具保留原向量仅离线分析。
+- 原始目录data/p3-results/pq-ranking-diag-dff0me3g，命令/环境/摘要/输出保留。i7-14650HX16物理核24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo、单线程CPU0、powersave/允许Turbo，开始接电；无warmup/无QPS，本轮只做准确率诊断。环境和详细协议bench/pq.md。
+- rel/san各233项通过（228 GoogleTest+4 CLI+1诊断），san detect_leaks=0，完整日志无ASan/UBSan告警；clang-format/diff通过，clang-tidy退出0保留风格建议。日志/tmp/ann-pq-diag-{rel,san}.log，学习表docs/learn/pq-ranking-diagnostic.md，阶段docs/validation/p3.md。
+- 当前未提交，不合并/宣布P3验收通过。下一步先检查既有训练轮数/样本规模影响，再决定新量化方案；不静默改目标、增加OPQ/变长分段/原向量重排。Git写操作用户执行，生成结果不入库。
