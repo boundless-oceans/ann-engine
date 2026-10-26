@@ -40,6 +40,10 @@ add_executable(ann_recall_diag
 )
 target_link_libraries(ann_recall_diag PRIVATE ann::core)
 
+# 重建误差和排序诊断；保留原向量仅用于离线分析，不进入索引。
+add_executable(ann_pq_diag pq_diag.cpp dataset.cpp)
+target_link_libraries(ann_pq_diag PRIVATE ann::core)
+
 if(ANN_BUILD_DISTANCE_BENCHMARKS)
     include(FetchContent)
 
