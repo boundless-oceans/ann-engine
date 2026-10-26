@@ -45,11 +45,16 @@ double L2(const float* a, const float* b, size_t dim) {
 
 // 分解路径复用训练/编码实现，但独立于IVF的列表、码寻址、查询和堆逻辑。
 // double解码距离不查表；它检验ADC数值关系，不证明训练器本身正确。
-bool Diagnose(const ann::bench::Dataset& data, size_t nlist, size_t m, size_t ksub, size_t k) {
+bool Diagnose(const ann::bench::Dataset& data,
+              size_t nlist,
+              size_t m,
+              size_t ksub,
+              size_t k,
+              size_t coarse_iters) {
     const size_t n = data.n, dim = data.dim, nq = data.nq;
     ann::IVFParams params;
     params.nlist = params.nprobe = nlist;
-    params.kmeans_iters = 5;
+    params.kmeans_iters = coarse_iters;
     params.seed = 42;
     std::cerr << "Training decomposed reference\n";
     ann::KMeans coarse(dim, nlist, params.kmeans_iters, params.seed);
@@ -100,7 +105,7 @@ bool Diagnose(const ann::bench::Dataset& data, size_t nlist, size_t m, size_t ks
     double max_relative_adc_error = 0, lost_rank_sum = 0, lost_distance_bias = 0;
     std::cout << std::setprecision(12) << "base=" << n << " dim=" << dim << " queries=" << nq
               << " k=" << k << " nlist=" << nlist << " nprobe=" << nlist << " pq_m=" << m
-              << " ksub=" << ksub << " coarse_iters=5 pq_iters=25 seed=42\n"
+              << " ksub=" << ksub << " coarse_iters=" << coarse_iters << " pq_iters=25 seed=42\n"
               << "reference=FlatIndex-on-subset; no QPS; no reranking\n";
     std::cerr << "Comparing exhaustive ADC, decoded double distances and IVF results\n";
     size_t examples = 0;
@@ -168,6 +173,9 @@ bool Diagnose(const ann::bench::Dataset& data, size_t nlist, size_t m, size_t ks
               << "reconstruction_mse_per_coordinate=" << error_sum / static_cast<double>(n * dim)
               << " residual_relative_squared_error="
               << (residual_energy > 0 ? error_sum / residual_energy : 0) << '\n'
+              << "coarse_residual_mse_per_coordinate="
+              << residual_energy / static_cast<double>(n * dim)
+              << " index_capacity_bytes=" << index.MemoryUsage() << '\n'
               << "lost_exact_neighbors=" << lost
               << " mean_adc_rank=" << (lost > 0 ? lost_rank_sum / static_cast<double>(lost) : 0)
               << " worst_adc_rank=" << worst_rank << " mean_distance_bias="
@@ -187,20 +195,23 @@ bool Diagnose(const ann::bench::Dataset& data, size_t nlist, size_t m, size_t ks
 
 int main(int argc, char** argv) {
     try {
-        if (argc == 2 && std::string_view(argv[1]) == "--self-check") {
+        if ((argc == 2 || argc == 3) && std::string_view(argv[1]) == "--self-check") {
+            const size_t coarse_iters = argc == 3 ? Positive(argv[2]) : 5;
             ann::bench::Dataset data;
             data.n = 4;
             data.dim = 4;
             data.nq = 2;
             data.base = {0, 0, 10, 10, 0, 0, 12, 12, 2, 2, 10, 10, 2, 2, 12, 12};
             data.queries = {3, 3, 13, 13, 0, 0, 10, 10};
-            return Diagnose(data, 1, 2, 2, 2) ? 0 : 1;
+            return Diagnose(data, 1, 2, 2, 2, coarse_iters) ? 0 : 1;
         }
-        if (argc < 2 || argc > 4) {
-            throw std::invalid_argument("Usage: ann_pq_diag DATA_DIR [nlist=256] [pq_m=32]");
+        if (argc < 2 || argc > 5) {
+            throw std::invalid_argument(
+                "Usage: ann_pq_diag DATA_DIR [nlist=256] [pq_m=32] [coarse_iters=5]");
         }
         const size_t nlist = argc > 2 ? Positive(argv[2]) : 256;
         const size_t m = argc > 3 ? Positive(argv[3]) : 32;
+        const size_t coarse_iters = argc > 4 ? Positive(argv[4]) : 5;
         auto data = ann::bench::LoadSIFT(argv[1], 10000);
         if (data.n != 10000 || data.nq < 100 || nlist > data.n || m > data.dim ||
             data.dim % m != 0) {
@@ -210,7 +221,7 @@ int main(int argc, char** argv) {
         data.nq = 100;
         data.queries.resize(data.nq * data.dim);
         data.groundtruth.clear();
-        return Diagnose(data, nlist, m, 256, 10) ? 0 : 1;
+        return Diagnose(data, nlist, m, 256, 10, coarse_iters) ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
         return 1;
