@@ -163,10 +163,10 @@ done
 
 此前IVFFlat入口阶段 rel/san各172项CTest通过（170项GoogleTest+2项CLI）；san临时detect_leaks=0，完整日志无ASan/UBSan告警。新增CLI检查覆盖只构建一次、CSV参数、独立参考、重复参数点、全探测/超范围截断、单值与扫描、格式/互斥/错误索引和默认Flat兼容。原HNSW扫描检查已适配新增CSV列并通过。
 
-IVFFlat与SQ8起步阶段已提交并合回P3；当前PQ入口和子集探索见[pq.md](pq.md)，精度目标仍未达。SQ8速度优化应先分解成本，不静默改训练或残差方案。学习/面试笔记在本机 docs/learn/ivf-benchmark.md，阶段验证见 docs/validation/p3.md。
+IVFFlat与SQ8起步阶段已提交并合回P3；当前PQ入口和子集探索见[pq.md](pq.md)，精度目标仍未达。SQ8速度优化应先分解成本，不静默改训练或残差方案。学习/面试笔记在本机 docs/learn/p3-ivf.md#ivf-benchmark，阶段验证见 docs/validation/p3.md。
 
 
-2026-10-25的SQ8入口新增1项CLI检查，全量rel/san各202项通过（199个GoogleTest+3个CLI），san临时detect_leaks=0，完整日志无ASan/UBSan告警。三套CLI检查通过，覆盖SQ8扫描/独立参考/元数据/内存降低/重复与单值一致/非法参数，默认Flat及原IVF/HNSW保持可用。本轮不改核心算法，后续是否优化SQ8逐列表建表应先定位成本；当前作为正确性与容量基线保留，再推进PQ，不能声称SQ8速度验收已达成。学习与面试表在本机docs/learn/sq8-benchmark.md。
+2026-10-25的SQ8入口新增1项CLI检查，全量rel/san各202项通过（199个GoogleTest+3个CLI），san临时detect_leaks=0，完整日志无ASan/UBSan告警。三套CLI检查通过，覆盖SQ8扫描/独立参考/元数据/内存降低/重复与单值一致/非法参数，默认Flat及原IVF/HNSW保持可用。本轮不改核心算法，后续是否优化SQ8逐列表建表应先定位成本；当前作为正确性与容量基线保留，再推进PQ，不能声称SQ8速度验收已达成。学习与面试表在本机docs/learn/p3-sq8.md#sq8-benchmark。
 
 
 PQ入口和子集起步探索现已完成，详见[pq.md](pq.md)。rel/san各232项CTest通过，本轮san关闭泄漏检查，日志无ASan/UBSan告警。本轮PQ工作点未达到严格Recall0.90，不能因为容量已下降就宣称P3验收通过；当前重点转向量化误差与工作点诊断，原SQ8/IVFFlat记录保留。
