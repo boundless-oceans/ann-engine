@@ -179,3 +179,57 @@ taskset -c 0 ./build-rel/bin/ann_pq_diag data 256 32 25
 原始目录 `data/p3-results/pq-coarse-iters-l5p2yrkj`，基于已提交24d698d与本轮工具改动；保存完整命令、代码差异/工具副本、二进制SHA256、实际使用的base/query前缀SHA256、CMakeCache、CPU/系统/编译器、每进程前后环境与输出。两进程退出0，2026-10-26 11:24:28–11:25:43 UTC+8，i7-14650HX16物理核/24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程CPU0、powersave/允许Turbo；各边界ACAD/online=0，其他供电来源、电源模式、实际频率及温度未确认。仅单次准确率诊断，无warmup、无QPS或训练速度比较；背景loadavg已保存，未随机化、未重复种子、未计算置信区间。100查询仍为探索集，不是独立验收集或百万库结果。
 
 rel/san各233项通过，san关闭泄漏检测，完整日志无ASan/UBSan告警；clang-format/diff通过，clang-tidy退出0有风格建议。学习补充追加至本地 `docs/learn/p3-pq.md#coarse-training-iterations`，不再拆短文件。用户已恢复设计文档，已核对P3目标、训练/量化接口及残差PQ决策。下一块先检查较大库的表现；改变库规模会同时改变候选与训练分布，不应直接称为单纯的“增加训练样本”收益。P3原验收目标保持不变。
+
+## SIFT100k 库规模对照（2026-10-26）
+
+本轮基于干净提交b1b7d9b，直接使用现有ann_bench，不改核心/接口/参数默认值。先后运行IVFFlat与残差IVF-PQ，各自构建一次并扫描nprobe16/64/256。SIFT原库前100000条×128维，同一原始前100查询，L2/k10、nlist256、粗25/PQ25轮、m32/ksub256/seed42，每点预热1轮/正式3轮并另跑召回轮。使用既有查询前缀视图，--max-base100000清除百万库官方参考，两模型各自在该截断库用FlatIndex重算严格ID答案。扩大库会同时改变训练分布、候选和参考近邻，不能解释为固定检索任务下“更多训练样本”的单独效应。
+
+```bash
+# data/p3-results 下的输出目录需事先准备；SIFT视图准备方法同前文。
+for mode in none pq; do
+  pq_args=()
+  if [ "$mode" = pq ]; then
+    pq_args=(--pq-m 32 --pq-ksub 256)
+  fi
+  taskset -c 0 ./build-rel/bin/ann_bench \
+    --index ivf --quantizer "$mode" --data "$sq8_result_dir/workload" \
+    --max-base 100000 --nlist 256 --kmeans-iters 25 \
+    --nprobe-list 16,64,256 --k 10 --metric l2 --seed 42 \
+    --warmup 1 --runs 3 "${pq_args[@]}" \
+    --csv "$sq8_result_dir/sift100k-$mode.csv" \
+    > "$sq8_result_dir/sift100k-$mode-console.txt" \
+    2> "$sq8_result_dir/sift100k-$mode-progress.txt"
+done
+```
+
+| nprobe | IVFFlat严格Recall | IVFFlat QPS | IVFFlat P99 ms | PQ32严格Recall | PQ32 QPS | PQ32 P99 ms |
+|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 0.975 | 2806.9 | 0.618538 | 0.766 | 1146.6 | 0.961623 |
+| 64 | 1.000 | 678.5 | 2.218518 | 0.771 | 289.5 | 3.646323 |
+| 256 | 1.000 | 138.3 | 9.818700 | 0.771 | 74.8 | 13.517568 |
+
+| 模式 | 索引申请容量（字节） | 同轮容量比 | 单次构建s |
+|---|---:|---:|---:|
+| IVFFlat | 51732332 | 1.00 | 53.214946 |
+| PQ m32 | 3863484 | 13.39 | 103.956515 |
+
+总体容量比51732332/3863484≈13.39，包含对象、原始ID/偏移、粗中心、PQ模型和编码；排除加载器、局部构建/查询空间、分配器内部开销，不是RSS/峰值。PQ载荷仍是32字节/向量，不能把理论16倍当成总体容量比。压缩没有在本轮带来更高QPS；两者准确率不同，不能将同nprobe吞吐比当成同精度内核比较。粗路由/未量化候选使用AVX2Four，PQ候选为标量ADC并逐列表建表，这是实现差异；没有perf/阶段计时，不将性能差距归因于已证明的唯一瓶颈。
+
+全探测PQ Recall0.771明显未达0.90，未量化全探测为1.0；nprobe64到256没有补回这些近邻。此前同配置10k库的粗25轮诊断为0.842，本轮扩大库后为0.771；保留两个结果，不据此声称训练样本变多导致模型变差，因为检索任务本身也改变。本轮只100查询、每点300条正式延迟样本，不视为足够稳定的尾延迟/置信区间证据，不外推百万库。
+
+原始目录 `data/p3-results/pq-sift100k-q100-azwc423y`，保存完整命令/输出/CSV、CPU/编译器/系统/CMakeCache、源码及静态链接二进制SHA256与二进制副本、实际base/query前缀SHA256、进程前后环境。两个C++进程退出0，6行CSV已核对库/查询/码长/轮数、探测值及同模型构建/容量字段一致；批次QPS包含计时记录开销，与逐条平均延迟倒数不要求严格相等。
+
+环境i7-14650HX16物理核/24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程CPU0、powersave、允许Turbo，所有进程边界ACAD/online=1、两个USB电源online=0，接电。电源模式/实际频率/温度未确认，loadavg已保存，未随机化先后顺序、重复建模/种子或计算置信区间。C++窗口2026-10-26 23:08:24–23:11:16 UTC+8，依次IVFFlat/PQ；各模型只构建一次，单次构建耗时不是统计均值。核心未改，沿用前一块rel/san各233项通过记录，本轮不重复构建/CTest，也不新增san或泄漏验证声明。
+
+### 同规模 Faiss 准确率诊断
+
+使用既有faiss-venv解释器的-I模式，无安装/下载。Faiss1.12.0/NumPy2.2.6/AVX2，OMP/BLAS单线程、CPU0，SIFT相同100k/100前缀，残差m32/ksub256、粗25/PQ25/配置seed42、全探测、max_codes0；参考为独立Faiss Flat，平局和训练中心不保证与C++一致。为避免默认训练抽样混入，coarse/pq的max_points_per_centroid均设置到不限制100k行：nlist256时391/391，nlist1024时256/391。实际use_precomputed_table=1，所有库向量加入索引。
+
+| Faiss nlist/nprobe | 全探测严格Recall |
+|---:|---:|
+| 256 / 256 | 0.779 |
+| 1024 / 1024 | 0.810 |
+
+同规模另一实现也有明显近似损失，细化粗聚类在该诊断中有所改善，但1024仍未到0.90。自研只测了256，不能把Faiss1024结果写成自研结果，也不能据两点推断增加nlist一定达到目标。Faiss只做准确率检查，不报告QPS、容量优势或纯C++速度比；脚本、配置、ID/参考数组及输出均在同一原始目录。时间23:12:57–23:13:38 UTC+8，powersave/允许Turbo/接电，其他环境局限同上。
+
+本轮总体容量满足8倍，但Recall仍未通过；P3整体验收未达成。下一块先评估更细粗聚类的收益与全量标量训练成本，再决定是否需要新的量化结构；OPQ、分段结构、重排或验收标准的变更仍由用户决定。学习补充写入本机 `docs/learn/p3-pq.md#larger-library`。

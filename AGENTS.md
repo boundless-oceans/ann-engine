@@ -336,3 +336,11 @@
 - 原始目录data/p3-results/pq-coarse-iters-l5p2yrkj，命令/数据前缀与二进制摘要/环境/输出保存。i7-14650HX16核24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程CPU0、powersave/允许Turbo，各边界ACAD/online=0，其他供电来源/电源模式/实际频率温度未确认；单次准确率诊断、无warmup/无QPS/无重复种子或独立验收集。详细协议bench/pq.md。
 - rel/san各233项通过，san detect_leaks=0，完整日志无ASan/UBSan告警；clang-format/diff通过、clang-tidy退出0有风格建议。学习补充追加docs/learn/p3-pq.md#coarse-training-iterations，未另拆短文档，阶段记录docs/validation/p3.md。当前未提交，不合并/宣布P3通过。
 - 本轮发现docs/design/和docs/decisions/不在工作区，已按指引询问；用户已恢复文档，代理已核对P3验收目标、训练/量化接口、ADR0016/0017及既有残差选择。当前只完成既有方案内训练参数对照，下一块先检查较大库表现；不能把改变候选库规模带来的变化称为纯训练样本效应。新结构/接口取舍仍需用户确认，Git写操作仍用户执行。
+
+### SIFT100k PQ 库规模对照（2026-10-26）
+
+- 用户已提交1838e0a/b1b7d9b，当前feat/p3-pq，起始干净。只用既有ann_bench测SIFT前100000×128/原前100查询、L2/k10、nlist256、粗25/PQ25、m32/ksub256/seed42，IVFFlat/PQ各建一次，nprobe16/64/256，各点warmup1/runs3，截断库独立Flat严格ID参考。
+- IVFFlat Recall0.975/1/1，PQ0.766/0.771/0.771；容量51732332/3863484字节，比13.39，单次构建53.214946/103.956515s，详细QPS/延迟/协议bench/pq.md。容量达标但Recall未到0.90，P3仍未通过；扩大库同时改变候选/训练/参考近邻，不视为纯训练样本效应。不宣称压缩加速、同精度吞吐或唯一瓶颈。
+- 原始目录data/p3-results/pq-sift100k-q100-azwc423y，命令/环境/数据前缀与源码及二进制SHA256/二进制副本/CSV/输出保留，2个C++进程退出0，6行CSV核对通过。i7-14650HX16物理核24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程CPU0、powersave/允许Turbo/接电，实际频率/温度/电源模式未确认；先IVFFlat后PQ，未随机化/重复建模/置信区间。仅100探索查询，不外推百万库，容量非RSS/峰值。
+- 既有Faiss1.12.0/NumPy2.2.6/AVX2、-I/CPU0/OMP及BLAS1准确率诊断：同规模残差m32/ksub256、粗25/PQ25/配置seed42，全探测/max_codes0，训练抽样上限覆盖全部100k，Faiss Flat参考。nlist256/1024 Recall0.779/0.810；没有Faiss QPS/容量优势结论，自研未测1024，中心/随机过程/平局不保证一致。脚本/配置/ID结果同目录，无下载依赖。
+- 核心/公开接口/默认值未改，本轮不重复构建/CTest，保留前一块rel/san233项记录，不新增泄漏/并发/OOM验证。学习补充docs/learn/p3-pq.md#larger-library；本轮仅文档待提交，结果仍忽略。下一块评估更细粗聚类收益及全量标量训练成本，再决定是否需要新的量化结构；OPQ/分段结构/重排/验收变更仍需用户确认，Git写操作仍用户执行。
