@@ -328,3 +328,11 @@
 - 用户要求融合同阶段短文档且保留原内容。docs/learn/由26篇整理为12篇主题文档加README导航；21篇原专题合入P1 SIMD/内存、P2基础/索引评测、P3 IVF/SQ8/PQ共7篇，5篇跨阶段教程与记录独立保留。
 - 旧专题文件已移除，正文、命令、问答与历史验证状态保留，来源文件名和迁移表见docs/learn/README.md。仓库内引用已改为合并文档的来源章节锚点；本目录继续忽略，不强制入库。后续同主题短补充优先追加，避免重新拆出碎片文件。
 - 只整理文档，不改核心/验收结论。PQ诊断代码已由用户提交，训练轮数/样本规模诊断仍待后续继续，Git写操作仍由用户执行。
+
+### PQ 粗训练轮数对照（2026-10-26）
+
+- 用户已提交学习整理24d698d，当前feat/p3-pq。本轮ann_pq_diag新增第四个位置参数coarse_iters，默认5保持旧命令；ann_bench/IVF默认25及PQ固定25不变。核心与公开接口不改，新增粗残差MSE与真实IVF-PQ申请容量输出，现有CTest覆盖默认/显式轮数及非法值。
+- 同一SIFT前10000×128/前100查询、k10、nlist/nprobe256、m32/ksub256/seed42，粗5/25轮分别重训残差PQ25轮。严格Recall0.856/0.842，粗残差MSE425.5867/420.4531，PQ重建MSE27.7642/27.5054，索引容量均623484字节；IVF/穷举ADC及double解码top-10位置差异均0。当前例子中MSE改善未带来Recall改善，不推断25轮普遍更差，不修改默认/验收目标。
+- 原始目录data/p3-results/pq-coarse-iters-l5p2yrkj，命令/数据前缀与二进制摘要/环境/输出保存。i7-14650HX16核24逻辑CPU、Ubuntu22.04/GCC11.4/RelWithDebInfo，单线程CPU0、powersave/允许Turbo，各边界ACAD/online=0，其他供电来源/电源模式/实际频率温度未确认；单次准确率诊断、无warmup/无QPS/无重复种子或独立验收集。详细协议bench/pq.md。
+- rel/san各233项通过，san detect_leaks=0，完整日志无ASan/UBSan告警；clang-format/diff通过、clang-tidy退出0有风格建议。学习补充追加docs/learn/p3-pq.md#coarse-training-iterations，未另拆短文档，阶段记录docs/validation/p3.md。当前未提交，不合并/宣布P3通过。
+- 本轮发现docs/design/和docs/decisions/不在工作区，已按指引询问；用户已恢复文档，代理已核对P3验收目标、训练/量化接口、ADR0016/0017及既有残差选择。当前只完成既有方案内训练参数对照，下一块先检查较大库表现；不能把改变候选库规模带来的变化称为纯训练样本效应。新结构/接口取舍仍需用户确认，Git写操作仍用户执行。
