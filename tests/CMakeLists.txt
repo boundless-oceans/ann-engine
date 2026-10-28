@@ -57,6 +57,8 @@ add_executable(ann_tests
     ivf_test.cpp          # 静态构建、nprobe 查询与独立精确参考
     scalar_quantizer_test.cpp # SQ8：范围、常量维、编解码误差与独立 ADC 参考
     ivf_sq8_test.cpp      # 残差 SQ8：逐列表 LUT、解码参考与释放原始存储
+    product_quantizer_test.cpp # PQ：子空间边界、码字范围与独立 ADC 参考
+    ivf_pq_test.cpp       # IVF-PQ：维度/码长分离、残差 ADC 与编码步长
 )
 
 # 测试私有纯选择函数，不把模拟 CPU 特性的入口暴露为公共 API。
@@ -86,6 +88,10 @@ target_link_libraries(ann_tests
 include(GoogleTest)
 gtest_discover_tests(ann_tests)
 
+add_test(NAME PQDiagnostic.DecodedReference
+    COMMAND ${CMAKE_COMMAND} -DANN_PQ_DIAG=$<TARGET_FILE:ann_pq_diag>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/pq_diag_test.cmake)
+
 # 复用 CMake 执行 CLI 集成检查，无需额外 Python 依赖。
 add_test(NAME BenchCli.EfSearchSweep
     COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
@@ -98,3 +104,7 @@ add_test(NAME BenchCli.IVFNProbeSweep
 add_test(NAME BenchCli.SQ8NProbeSweep
     COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/bench_sq8_cli_test.cmake)
+
+add_test(NAME BenchCli.PQNProbeSweep
+    COMMAND ${CMAKE_COMMAND} -DANN_BENCH=$<TARGET_FILE:ann_bench>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/bench_pq_cli_test.cmake)

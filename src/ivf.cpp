@@ -62,11 +62,18 @@ IVFIndex::IVFIndex(size_t dim,
         throw std::invalid_argument("IVF currently supports L2 only");
     }
     if (quantizer) {
-        // 抽象接口尚无 Dim，首版只接入内置 SQ8，不能依赖 Name 字符串识别类型。
-        const auto* scalar = dynamic_cast<const ScalarQuantizer*>(quantizer.get());
-        if (scalar == nullptr || scalar->CodeSize() != dim) {
-            throw std::invalid_argument("IVF requires a dimension-matched built-in SQ8 quantizer");
+        if (quantizer->Dim() != dim) {
+            throw std::invalid_argument("IVF quantizer dimension must match the index");
         }
+        // 形状统一走基类契约，类型检查仅限定本阶段支持的内置实现/报告名称。
+        if (dynamic_cast<const ScalarQuantizer*>(quantizer.get()) != nullptr) {
+            quantizer_kind_ = QuantizerKind::SQ8;
+        } else if (dynamic_cast<const ProductQuantizer*>(quantizer.get()) != nullptr) {
+            quantizer_kind_ = QuantizerKind::PQ;
+        } else {
+            throw std::invalid_argument("IVF currently supports built-in SQ8 or PQ quantizers");
+        }
+        code_size_ = quantizer->CodeSize();
     }
     if (dim > std::numeric_limits<size_t>::max() / sizeof(float) / params.nlist) {
         throw std::length_error("IVF centroid storage size overflow");
@@ -76,6 +83,18 @@ IVFIndex::IVFIndex(size_t dim,
 
 size_t IVFIndex::Size() const {
     return n_;
+}
+
+const char* IVFIndex::Name() const {
+    switch (quantizer_kind_) {
+        case QuantizerKind::None:
+            return "IVFFlat";
+        case QuantizerKind::SQ8:
+            return "IVFSQ8";
+        case QuantizerKind::PQ:
+            return "IVFPQ";
+    }
+    return "IVF";
 }
 
 void IVFIndex::Add(size_t n, const float* vecs) {
@@ -113,7 +132,7 @@ void IVFIndex::Build() {
     auto lists = detail::BuildIVFLists(assignments, params_.nlist);
     std::vector<uint8_t> codes;
     if (quantizer_) {
-        // 共享一个全局残差模型；整批残差和原始向量都不进入构建后的持久存储。
+        // 共享一个全局残差量化器；整批残差和原向量不进入构建后的持久存储。
         std::vector<float> residuals(raw_vectors_.size());
         for (size_t id = 0; id < n; ++id) {
             Residual(raw_vectors_.data() + id * dim_,
@@ -121,14 +140,14 @@ void IVFIndex::Build() {
                      dim_,
                      residuals.data() + id * dim_);
         }
-        if (n > codes.max_size() / dim_) {
+        if (n > codes.max_size() / code_size_) {
             throw std::length_error("IVF encoded storage size overflow");
         }
-        codes.resize(n * dim_);
+        codes.resize(n * code_size_);
         // 失败不发布索引结构；私有量化器可能已完成训练，重试时会重新 Train。
         quantizer_->Train(n, residuals.data());
         for (size_t id = 0; id < n; ++id) {
-            quantizer_->Encode(residuals.data() + id * dim_, codes.data() + id * dim_);
+            quantizer_->Encode(residuals.data() + id * dim_, codes.data() + id * code_size_);
         }
     }
     centroids_.swap(centers);
@@ -184,10 +203,10 @@ void IVFIndex::Search(const float* query, size_t k, ResultView out) const {
         for (size_t pos = list_offsets_[c]; pos < list_offsets_[c + 1]; ++pos) {
             const idx_t id = list_ids_[pos];
             const dist_t distance =
-                quantizer_
-                    ? quantizer_->DistanceFromLUT(lut.data(), codes_.data() + size_t{id} * dim_)
-                    : CheckedDistance(
-                          dist_fn_, query, raw_vectors_.data() + size_t{id} * dim_, dim_);
+                quantizer_ ? quantizer_->DistanceFromLUT(lut.data(),
+                                                         codes_.data() + size_t{id} * code_size_)
+                           : CheckedDistance(
+                                 dist_fn_, query, raw_vectors_.data() + size_t{id} * dim_, dim_);
             const Candidate candidate{distance, id};
             if (results.size() < limit) {
                 results.push_back(candidate);
