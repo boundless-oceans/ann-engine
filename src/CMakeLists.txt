@@ -17,6 +17,9 @@ add_library(ann_core
     distance.cpp        # 标量距离函数与当前派发
     distance_avx2.cpp   # AVX2 + FMA 单/四累加器，函数级指令集隔离
     memory_pool.cpp     # 对齐分配与构建期内存池
+    kmeans.cpp          # IVF/PQ 共用的 L2 聚类训练器
+    quantizer.cpp       # SQ8：每维范围训练、编解码与调用方 LUT
+    product_quantizer.cpp # PQ：子空间码本训练、编解码与 ADC
 
     # ---- 索引层 ----
     flat.cpp            # FlatIndex：暴力检索 / ground-truth 生成器
@@ -24,10 +27,10 @@ add_library(ann_core
     hnsw_level.cpp      # HNSW：固定种子的随机层数生成
     hnsw_search.cpp     # HNSW：只读贪心下降与单层 ef 搜索
     hnsw.cpp            # HNSW：多样性选邻、反向裁剪与完整索引查询
+    ivf_lists.cpp       # IVF：由簇分配建立静态 CSR 倒排列表
+    ivf.cpp             # IVF：未量化 L2 训练、构建和 nprobe 查询
 
     # ---- 尚未实现的模块：实现时取消注释，并加入上面的源文件列表 ----
-    # ivf.cpp           倒排索引（IVF）
-    # quantizer.cpp     标量量化 / 乘积量化（SQ / PQ）
     # storage.cpp       索引序列化与加载
     # wal.cpp           预写日志与崩溃恢复
 )

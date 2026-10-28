@@ -158,6 +158,6 @@ ctest --preset san --output-on-failure
 
 最近 M 基础阶段之后已完成剪枝同轮对照和全量SIFT1M扫描，见上文；Faiss对照现已完成，见 [基线说明](faiss.md)；真实并发/TSan和分配失败注入仍未验证。
 
-剪枝块新增10个测试，总计rel/san各137项通过；沙盒san设置detect_leaks=0，完整日志无ASan/UBSan告警。用户随后报告普通终端默认san的137项全部通过（4.33秒），代理未另行复核该次完整日志。手算、边界和面试点见本地 [多样性选邻笔记](../docs/learn/hnsw-neighbor-selection.md)。后续扫描与全量验证现已完成；公开查询仍使用局部工作区。
+剪枝块新增10个测试，总计rel/san各137项通过；沙盒san设置detect_leaks=0，完整日志无ASan/UBSan告警。用户随后报告普通终端默认san的137项全部通过（4.33秒），代理未另行复核该次完整日志。手算、边界和面试点见本地 [多样性选邻笔记](../docs/learn/p2-hnsw-index-and-benchmark.md#hnsw-neighbor-selection)。后续扫描与全量验证现已完成；公开查询仍使用局部工作区。
 
 本轮扫描新增1项CLI集成检查，rel/san各138项通过，san临时detect_leaks=0，完整日志无ASan/UBSan告警；用户随后报告普通终端默认san的138项全部通过（4.52秒），代理未另行复核该次完整日志。扫描入口及曲线已提交；后续同条件Python Faiss基线和收尾集成已完成，见 [对照说明](faiss.md)。

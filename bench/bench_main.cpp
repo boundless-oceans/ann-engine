@@ -25,6 +25,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "dataset.h"
@@ -34,13 +35,23 @@
 #include "ann/flat.h"
 #include "ann/hnsw.h"
 #include "ann/index.h"
+#include "ann/ivf.h"
 #include "ann/types.h"
 
 namespace {
 
 struct Options {
     std::string index = "flat";
+    std::string quantizer = "none";
+    size_t pq_m = 16;
+    size_t pq_ksub = 256;
+    bool pq_explicit = false;
     ann::HNSWParams hnsw;
+    ann::IVFParams ivf;
+    std::vector<size_t> nprobe_list;
+    bool nprobe_explicit = false;
+    bool ivf_explicit = false;
+    bool hnsw_explicit = false;
     std::vector<size_t> ef_search_list;
     bool ef_search_explicit = false;
     std::string csv_path;
@@ -63,11 +74,18 @@ void PrintUsage() {
         "usage: ann_bench [options]\n"
         "\n"
         "options:\n"
-        "  --index <name>    flat | hnsw (default flat)\n"
+        "  --index <name>    flat | hnsw | ivf (default flat)\n"
         "  --m <int>         HNSW M, Mmax0=2*M (default 16)\n"
         "  --ef-construction <int> HNSW build width (default 200)\n"
         "  --ef-search <int> HNSW search width (default 64)\n"
         "  --ef-search-list <ints> HNSW sweep, e.g. 16,32,64,128; build once\n"
+        "  --quantizer <name> IVF none | sq8 | pq (default none); quantized modes use residuals\n"
+        "  --pq-m <int>      PQ subspace count (default 16), must divide dimension\n"
+        "  --pq-ksub <int>   PQ centers per subspace, 1..256 (default 256); training is 25 rounds\n"
+        "  --nlist <int>     IVF cluster count (default 1024)\n"
+        "  --nprobe <int>    IVF requested probe count (default 16)\n"
+        "  --nprobe-list <ints> IVF sweep, e.g. 1,4,16; train/build once\n"
+        "  --kmeans-iters <int> IVF training iterations (default 25)\n"
         "  --csv <path>      export measurement rows as CSV\n"
         "  --n <int>         number of base vectors for synthetic data (default 100000)\n"
         "  --nq <int>        number of queries (default 1000)\n"
@@ -76,14 +94,14 @@ void PrintUsage() {
         "  --metric <name>   l2 | ip (default l2)\n"
         "  --data <dir>      load SIFT1M from dir instead of synthetic data\n"
         "  --max-base <int>  truncate base vectors (debug only)\n"
-        "  --seed <int>      random seed for synthetic data (default 42)\n"
+        "  --seed <int>      random seed for data and index training/build (default 42)\n"
         "  --warmup <int>    warmup rounds, not measured (default 1)\n"
         "  --runs <int>      measured rounds (default 3)\n"
         "  -h, --help        show this message\n");
 }
 
 // 严格解析正整数列表；保留输入顺序与重复项，支持反向/重复测量观察顺序影响。
-bool ParseEfSearchList(std::string_view text, std::vector<size_t>* values) {
+bool ParsePositiveList(std::string_view text, std::vector<size_t>* values) {
     values->clear();
     while (!text.empty()) {
         const auto comma = text.find(',');
@@ -101,6 +119,12 @@ bool ParseEfSearchList(std::string_view text, std::vector<size_t>* values) {
         text.remove_prefix(comma + 1);
     }
     return false;
+}
+
+bool ParsePositive(std::string_view text, size_t* value) {
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), *value);
+    return !text.empty() && parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() &&
+           *value != 0;
 }
 
 // 返回 false 表示参数非法，应当终止。
@@ -123,31 +147,79 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
             if (v == nullptr)
                 return false;
             opt->index = v;
+        } else if (a == "--quantizer") {
+            const char* v = need_value("--quantizer");
+            if (v == nullptr)
+                return false;
+            opt->quantizer = v;
+            opt->ivf_explicit = true;
+            if (opt->quantizer != "none" && opt->quantizer != "sq8" && opt->quantizer != "pq") {
+                std::fprintf(stderr, "error: quantizer must be none, sq8 or pq\n");
+                return false;
+            }
+        } else if (a == "--pq-m" || a == "--pq-ksub") {
+            const char* v = need_value(a.c_str());
+            if (v == nullptr)
+                return false;
+            size_t* target = a == "--pq-m" ? &opt->pq_m : &opt->pq_ksub;
+            if (!ParsePositive(v, target)) {
+                std::fprintf(stderr, "error: %s requires a positive integer\n", a.c_str());
+                return false;
+            }
+            opt->pq_explicit = true;
+            opt->ivf_explicit = true;
         } else if (a == "--m") {
+            opt->hnsw_explicit = true;
             const char* v = need_value("--m");
             if (v == nullptr)
                 return false;
             opt->hnsw.M = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--ef-construction") {
+            opt->hnsw_explicit = true;
             const char* v = need_value("--ef-construction");
             if (v == nullptr)
                 return false;
             opt->hnsw.ef_construction = static_cast<size_t>(std::strtoull(v, nullptr, 10));
         } else if (a == "--ef-search") {
+            opt->hnsw_explicit = true;
             const char* v = need_value("--ef-search");
             if (v == nullptr)
                 return false;
             opt->hnsw.ef_search = static_cast<size_t>(std::strtoull(v, nullptr, 10));
             opt->ef_search_explicit = true;
         } else if (a == "--ef-search-list") {
+            opt->hnsw_explicit = true;
             const char* v = need_value("--ef-search-list");
             if (v == nullptr)
                 return false;
-            if (!ParseEfSearchList(v, &opt->ef_search_list)) {
+            if (!ParsePositiveList(v, &opt->ef_search_list)) {
                 std::fprintf(stderr,
                              "error: ef-search-list requires positive comma-separated integers\n");
                 return false;
             }
+        } else if (a == "--nlist" || a == "--nprobe" || a == "--kmeans-iters") {
+            const char* v = need_value(a.c_str());
+            if (v == nullptr)
+                return false;
+            size_t* target = a == "--nlist"    ? &opt->ivf.nlist
+                             : a == "--nprobe" ? &opt->ivf.nprobe
+                                               : &opt->ivf.kmeans_iters;
+            if (!ParsePositive(v, target)) {
+                std::fprintf(stderr, "error: %s requires a positive integer\n", a.c_str());
+                return false;
+            }
+            opt->ivf_explicit = true;
+            opt->nprobe_explicit |= a == "--nprobe";
+        } else if (a == "--nprobe-list") {
+            const char* v = need_value("--nprobe-list");
+            if (v == nullptr)
+                return false;
+            if (!ParsePositiveList(v, &opt->nprobe_list)) {
+                std::fprintf(stderr,
+                             "error: nprobe-list requires positive comma-separated integers\n");
+                return false;
+            }
+            opt->ivf_explicit = true;
         } else if (a == "--csv") {
             const char* v = need_value("--csv");
             if (v == nullptr)
@@ -221,8 +293,8 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
         std::fprintf(stderr, "error: n / nq / dim / k / runs must all be positive\n");
         return false;
     }
-    if (opt->index != "flat" && opt->index != "hnsw") {
-        std::fprintf(stderr, "error: index must be flat or hnsw\n");
+    if (opt->index != "flat" && opt->index != "hnsw" && opt->index != "ivf") {
+        std::fprintf(stderr, "error: index must be flat, hnsw or ivf\n");
         return false;
     }
     if (!opt->ef_search_list.empty() && (opt->index != "hnsw" || opt->ef_search_explicit)) {
@@ -235,6 +307,23 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
         std::fprintf(stderr, "error: invalid HNSW parameters\n");
         return false;
     }
+    if (opt->ivf_explicit && opt->index != "ivf") {
+        std::fprintf(stderr, "error: IVF options require --index ivf\n");
+        return false;
+    }
+    if (opt->index == "ivf" && (opt->metric != ann::Metric::L2 || opt->hnsw_explicit ||
+                                opt->ivf.nlist > ann::kInvalidIdx ||
+                                (!opt->nprobe_list.empty() && opt->nprobe_explicit))) {
+        std::fprintf(stderr,
+                     "error: IVF requires l2, IVF-only parameters and mutually exclusive "
+                     "nprobe/nprobe-list\n");
+        return false;
+    }
+    if ((opt->pq_explicit && opt->quantizer != "pq") ||
+        (opt->quantizer == "pq" && opt->pq_ksub > 256)) {
+        std::fprintf(stderr, "error: PQ options require --quantizer pq and pq-ksub<=256\n");
+        return false;
+    }
     if (!opt->data_dir.empty() && opt->metric != ann::Metric::L2) {
         std::fprintf(stderr, "error: SIFT official ground truth requires l2\n");
         return false;
@@ -243,6 +332,7 @@ bool ParseArgs(int argc, char** argv, Options* opt) {
         opt->hnsw.Mmax0 = 2 * opt->hnsw.M;
         opt->hnsw.seed = opt->seed;
     }
+    opt->ivf.seed = opt->seed;
     return true;
 }
 
@@ -314,7 +404,8 @@ int RunBenchmark(int argc, char** argv) {
         csv.open(opt.csv_path);
         csv << "index,metric,n,dim,nq,k,M,Mmax0,ef_construction,ef_search,effective_ef_search,"
                "seed,warmup,runs,build_seconds,memory_bytes,recall,qps,mean_ms,p50_ms,p95_ms,p99_"
-               "ms,max_ms\n";
+               "ms,max_ms,nlist,nprobe,effective_nprobe,kmeans_iters,quantizer,encoding,code_size,"
+               "lut_floats,pq_m,pq_ksub\n";
         csv << std::fixed << std::setprecision(9);
         csv.flush();
     }
@@ -333,10 +424,36 @@ int RunBenchmark(int argc, char** argv) {
         }
     }
 
+    if (opt.index == "ivf" && opt.ivf.nlist > ds.n) {
+        std::fprintf(stderr, "error: nlist must not exceed the loaded base vector count\n");
+        return 1;
+    }
+
+    if (opt.quantizer == "pq" && (ds.dim % opt.pq_m != 0 || opt.pq_ksub > ds.n)) {
+        std::fprintf(stderr,
+                     "error: PQ requires dimension divisible by pq-m and base count >= pq-ksub\n");
+        return 1;
+    }
+
     // ---------------- 构建索引 ----------------
     std::unique_ptr<ann::Index> owned_index;
+    size_t code_size = 0, lut_floats = 0;
     if (opt.index == "hnsw") {
         owned_index = std::make_unique<ann::HNSWIndex>(ds.dim, opt.metric, opt.hnsw);
+    } else if (opt.index == "ivf") {
+        std::unique_ptr<ann::Quantizer> quantizer;
+        if (opt.quantizer == "sq8") {
+            quantizer = std::make_unique<ann::ScalarQuantizer>(ds.dim);
+        } else if (opt.quantizer == "pq") {
+            quantizer =
+                std::make_unique<ann::ProductQuantizer>(ds.dim, opt.pq_m, opt.pq_ksub, opt.seed);
+        }
+        if (quantizer) {
+            code_size = quantizer->CodeSize();
+            lut_floats = quantizer->LutSize();
+        }
+        owned_index =
+            std::make_unique<ann::IVFIndex>(ds.dim, opt.metric, opt.ivf, std::move(quantizer));
     } else {
         owned_index = std::make_unique<ann::FlatIndex>(ds.dim, opt.metric);
     }
@@ -355,7 +472,7 @@ int RunBenchmark(int argc, char** argv) {
     size_t gt_dim = ds.gt_dim;
     if (gt.empty()) {
         std::fprintf(stderr, "[bench] Computing exact Flat reference\n");
-        if (opt.index == "hnsw") {
+        if (opt.index != "flat") {
             // ANN 不得把自身输出当作答案；独立 Flat 枚举产生严格 ID 参考。
             ann::FlatIndex reference(ds.dim, opt.metric);
             reference.Add(ds.n, ds.base.data());
@@ -366,16 +483,22 @@ int RunBenchmark(int argc, char** argv) {
         gt_dim = opt.k;
     }
 
-    const std::vector<size_t> ef_values =
-        opt.ef_search_list.empty() ? std::vector<size_t>{opt.hnsw.ef_search} : opt.ef_search_list;
-    for (const size_t ef : ef_values) {
+    const std::vector<size_t> search_values =
+        opt.index == "ivf"
+            ? (opt.nprobe_list.empty() ? std::vector<size_t>{opt.ivf.nprobe} : opt.nprobe_list)
+            : (opt.ef_search_list.empty() ? std::vector<size_t>{opt.hnsw.ef_search}
+                                          : opt.ef_search_list);
+    for (const size_t value : search_values) {
         if (opt.index == "hnsw") {
-            static_cast<ann::HNSWIndex&>(index).SetEfSearch(ef);
+            static_cast<ann::HNSWIndex&>(index).SetEfSearch(value);
+        } else if (opt.index == "ivf") {
+            static_cast<ann::IVFIndex&>(index).SetNProbe(value);
         }
         std::fprintf(stderr,
-                     "[bench] Measuring %s: ef=%zu, warmup=%zu, runs=%zu\n",
+                     "[bench] Measuring %s: ef=%zu, nprobe=%zu, warmup=%zu, runs=%zu\n",
                      index.Name(),
-                     opt.index == "hnsw" ? ef : 0,
+                     opt.index == "hnsw" ? value : 0,
+                     opt.index == "ivf" ? value : 0,
                      opt.warmup,
                      opt.runs);
         // ---------------- 预热与测量 ----------------
@@ -415,7 +538,12 @@ int RunBenchmark(int argc, char** argv) {
         const auto dist_fn = ann::SelectDistFn(opt.metric);
         const bool simd = dist_fn == ann::L2SqrAVX2Four || dist_fn == ann::InnerProductAVX2Four;
         std::printf("cpu avx2/fma : %s/%s\n", cpu.avx2 ? "yes" : "no", cpu.fma ? "yes" : "no");
-        std::printf("distance fn  : %s\n", simd ? "AVX2Four" : "Scalar");
+        if (opt.quantizer != "none") {
+            std::printf("coarse fn    : %s\n", simd ? "AVX2Four" : "Scalar");
+            std::printf("candidate fn : %s ADC (scalar)\n", opt.quantizer == "pq" ? "PQ" : "SQ8");
+        } else {
+            std::printf("distance fn  : %s\n", simd ? "AVX2Four" : "Scalar");
+        }
         std::printf("data source  : %s\n", synthetic ? "synthetic" : opt.data_dir.c_str());
         std::printf("base         : %zu x %zu\n", ds.n, ds.dim);
         std::printf("queries      : %zu\n", ds.nq);
@@ -430,6 +558,22 @@ int RunBenchmark(int argc, char** argv) {
             std::printf("max level    : %d\n", stats.max_level);
             std::printf("avg degree0  : %.2f\n", stats.avg_degree_l0);
         }
+        if (opt.index == "ivf") {
+            std::printf("nlist        : %zu\n", opt.ivf.nlist);
+            std::printf("nprobe req/eff: %zu/%zu\n", value, std::min(value, opt.ivf.nlist));
+            std::printf("kmeans iters : %zu\n", opt.ivf.kmeans_iters);
+            std::printf("quantizer    : %s\n", opt.quantizer.c_str());
+            std::printf("encoding     : %s\n", opt.quantizer != "none" ? "residual" : "raw");
+            if (opt.quantizer != "none") {
+                std::printf("code bytes   : %zu per vector\n", code_size);
+                std::printf("LUT floats   : %zu per query, rebuilt for each nonempty list\n",
+                            lut_floats);
+            }
+            if (opt.quantizer == "pq") {
+                std::printf("PQ m/ksub    : %zu/%zu\n", opt.pq_m, opt.pq_ksub);
+                std::printf("PQ training  : 25 rounds per subspace\n");
+            }
+        }
         std::printf("\n");
         std::printf("build time   : %.3f s\n", build_seconds);
         std::printf("memory       : %.1f MB\n",
@@ -443,7 +587,7 @@ int RunBenchmark(int argc, char** argv) {
         std::printf("latency max  : %.4f ms\n", st.max);
         std::printf("\n");
 
-        if (synthetic && opt.index == "hnsw") {
+        if (synthetic && opt.index != "flat") {
             std::printf(
                 "note: synthetic ground truth was computed independently with FlatIndex.\n");
         } else if (synthetic) {
@@ -458,10 +602,17 @@ int RunBenchmark(int argc, char** argv) {
             csv << index.Name() << ',' << MetricName(opt.metric) << ',' << ds.n << ',' << ds.dim
                 << ',' << ds.nq << ',' << opt.k << ',' << (hnsw ? params.M : 0) << ','
                 << (hnsw ? params.Mmax0 : 0) << ',' << (hnsw ? params.ef_construction : 0) << ','
-                << (hnsw ? ef : 0) << ',' << (hnsw ? std::max(ef, opt.k) : 0) << ',' << opt.seed
-                << ',' << opt.warmup << ',' << opt.runs << ',' << build_seconds << ','
+                << (hnsw ? value : 0) << ',' << (hnsw ? std::max(value, opt.k) : 0) << ','
+                << opt.seed << ',' << opt.warmup << ',' << opt.runs << ',' << build_seconds << ','
                 << index.MemoryUsage() << ',' << recall << ',' << timer.Qps() << ',' << st.mean
-                << ',' << st.p50 << ',' << st.p95 << ',' << st.p99 << ',' << st.max << '\n';
+                << ',' << st.p50 << ',' << st.p95 << ',' << st.p99 << ',' << st.max << ','
+                << (opt.index == "ivf" ? opt.ivf.nlist : 0) << ','
+                << (opt.index == "ivf" ? value : 0) << ','
+                << (opt.index == "ivf" ? std::min(value, opt.ivf.nlist) : 0) << ','
+                << (opt.index == "ivf" ? opt.ivf.kmeans_iters : 0) << ',' << opt.quantizer << ','
+                << (opt.quantizer != "none" ? "residual" : "raw") << ',' << code_size << ','
+                << lut_floats << ',' << (opt.quantizer == "pq" ? opt.pq_m : 0) << ','
+                << (opt.quantizer == "pq" ? opt.pq_ksub : 0) << '\n';
             csv.flush();
         }
         std::fflush(stdout);

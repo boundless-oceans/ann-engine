@@ -7,7 +7,7 @@
 从零实现的高性能 ANN 检索引擎（C++20）。**手写** HNSW / IVF 索引与 PQ/SQ 量化，
 不依赖 Faiss 等现成库，并与 Faiss 做性能对照。
 
-> **状态：P1 已完成，P2 HNSW 本机验收已通过，待收尾提交/合并，P0 原验收差异保留** —— Ubuntu 上 rel 构建的 27 个测试已通过，合成数据评测已跑通；
+> **状态：P1/P2 已完成并合回 main，P3 已完成 SQ8 起步对照，正在推进 PQ，P0 原验收差异保留** —— Ubuntu 上 rel 构建的 27 个测试已通过，合成数据评测已跑通；
 > san 构建的 27 个测试也已通过，日志无 ASan / UBSan 告警；全量 SIFT1M 严格 Recall@10=0.999300，
 > 70 条差异已确认为同距离点的不同选择。保留严格指标与原验收标准，尚未达到 1.0。
 
@@ -31,6 +31,8 @@
 
 ## 文档
 
+学习教程按阶段汇总在本机 [学习文档导航](docs/learn/README.md)。
+
 > 设计文档在本地 `docs/` 下持续演进，目前被 Git 忽略，远程仓库中的链接可能不可用。
 
 | 文档 | 内容 |
@@ -46,8 +48,8 @@
 |---|---|---|
 | P0 | 工程骨架 + FlatIndex + 评测框架 | 🟡 rel/san 测试通过，基线已记录；严格 Recall=0.999300，差异已解释但原验收未达成 |
 | P1 | SIMD 距离 + 内存池 | ✅ 已完成集成验证并合回 main，记录见下文 |
-| P2 | HNSW | ✅ 全量曲线、同轮Python Faiss对照及本机验收通过；待收尾提交/合回main |
-| P3 | IVF + SQ/PQ | ⬜ 未开始 |
+| P2 | HNSW | ✅ 全量曲线、同轮Python Faiss对照及本机验收通过，已合回 main |
+| P3 | IVF + SQ/PQ | 🚧 KMeans、L2 IVFFlat 构建/查询已实现；IVF 评测入口与 SIFT10k 起步基线已完成；独立 SQ8 与 IVF 残差查询已实现；SQ8 起步对照已完成，PQ 核心/评测已实现；当前子集Recall未达0.90，验收待推进 |
 | P4 | 持久化 + 崩溃恢复 | ⬜ 未开始 |
 | P5 | 服务化（gRPC / HTTP） | ⬜ 未开始 |
 | P6 | 差异化（过滤检索 / GPU 批量距离 / 删除） | ⬜ 未开始 |
@@ -277,13 +279,13 @@ GCC 11.4、RelWithDebInfo，单线程未绑核，128 维热缓存，预热最短
 Flat 仍按 n×dim 紧密排列，AVX2 保留 loadu，查询仍只读且零分配。新增 13 个测试，代理已在沙盒完成
 GCC 11.4 rel/san 各 63 个测试；本轮 san 因沙盒 LeakSanitizer 环境错误临时关闭泄漏扫描，
 ASan/UBSan 无告警，用户随后已在普通终端完成包含这些用例的默认 san 检查。没有新增性能结论或重跑全量 SIFT1M；
-对齐存储阶段的实现取舍、复现命令与面试点见本地 [对齐内存笔记](docs/learn/aligned-memory.md)。
+对齐存储阶段的实现取舍、复现命令与面试点见本地 [对齐内存笔记](docs/learn/p1-memory.md#aligned-memory)。
 
 当前 `feat/p1-build-arena` 已实现构建期内存池：缓存上游保留单调资源归还的块，Reset 清零用户申请计数、
 保留容量供后续构建复用。Reset 前必须先销毁使用池内存的对象和容器，池非线程安全，不进入 Search。
 新增 10 个测试，GCC 11.4 rel/san 各 73 个通过；本轮沙盒 san 临时关闭 LeakSanitizer，ASan/UBSan 无告警，
 用户已报告普通终端默认 san 的 73 个测试全部通过。当前仅交付基础设施，尚未接入索引构建，无新性能结论；下一步为 perf 分析。
-取舍、生命周期示例及面试要点见本地 [BuildArena 笔记](docs/learn/build-arena.md)。
+取舍、生命周期示例及面试要点见本地 [BuildArena 笔记](docs/learn/p1-memory.md#build-arena)。
 
 perf 已进入采集准备：工具可用，但初始探针在代理及用户终端均被拒绝；用户处理后普通终端硬件探针成功，代理环境仍受限。
 已整理 [perf 采集方案](bench/perf.md)，固定 P 核的 Flat 合成负载已采集首轮 IPC≈1.36；缓存与采样已完成首轮：主要 cycles 样本落在 L2SqrAVX2Four，结果、环境与归因边界见采集方案；Scalar/AVX2 的固定 P 核 IPC 对照也已完成，原始数据与解释见采集方案；不宣称已达到 roofline。
@@ -304,14 +306,14 @@ perf 已进入采集准备：工具可用，但初始探针在代理及用户终
 新增 13 个测试，包含二维十点小图、300 次追加、层间隔离、非法邻居更新及 32 位偏移上限。
 GCC 11.4 rel/san 各 86 个测试通过；本轮沙盒 san 临时关闭泄漏扫描，ASan/UBSan 无告警。
 用户随后已在普通终端通过默认 san 的全部114个测试，包含此前图存储和随机层数用例。图存储阶段当时尚无完整 HNSWIndex；当前集成结果见后续段落。
-本地讲解与面试要点见 [图存储笔记](docs/learn/hnsw-graph-storage.md)。
+本地讲解与面试要点见 [图存储笔记](docs/learn/p2-hnsw-foundations.md#hnsw-graph-storage)。
 
 新增内部 `HNSWLevelGenerator`（src/hnsw_level.h/.cpp），按 `floor(-ln(U)/ln(M))` 生成最高层，
 每实例独立 mt19937_64，默认种子 42；显式映射严格开区间 U，安全限制 uint8_t 层范围。
 新增 10 个测试，总计 rel/san 各 96 个通过；本轮沙盒 san 关闭泄漏扫描、ASan/UBSan 无告警，
 用户随后已在普通终端通过默认 san 的全部114个测试，包含此前图存储和随机层数用例。M=2/4/16/32 各 100 万样本的尾分布与均值检查通过，
 另完成生成层数与 5000 节点图存储的集成检查；尚未实现自动连接、插入或搜索。
-原理、样本统计与面试要点见本地 [随机层数笔记](docs/learn/hnsw-random-level.md)。该阶段后续搜索原语状态见下段。
+原理、样本统计与面试要点见本地 [随机层数笔记](docs/learn/p2-hnsw-foundations.md#hnsw-random-level)。该阶段后续搜索原语状态见下段。
 
 新增私有 `src/hnsw_search.h/.cpp`：严格改善的单层贪心下降、双堆单层 ef 搜索，
 通过 const 图引用只读访问，临时堆和访问表由调用方独占工作区持有。工作区提前准备，
@@ -319,7 +321,7 @@ GCC 11.4 rel/san 各 86 个测试通过；本轮沙盒 san 临时关闭泄漏扫
 可达节点不足时可以更少，按距离/ID 排序；该规则不改变 P0 严格 Recall 定义。
 新增 18 个搜索测试，GCC 11.4 rel/san 各 114 个通过，本轮沙盒 san 关闭泄漏扫描、ASan/UBSan 无告警，
 用户已在普通终端通过默认 san 的114个测试。该搜索原语阶段当时尚无完整 HNSWIndex；
-当前索引集成结果见下段。原理与面试点见本地 [分层搜索笔记](docs/learn/hnsw-layer-search.md)。
+当前索引集成结果见下段。原理与面试点见本地 [分层搜索笔记](docs/learn/p2-hnsw-foundations.md#hnsw-layer-search)。
 
 
 ### 基础插入与完整查询（2026-10-23）
@@ -330,7 +332,7 @@ GCC 11.4 rel/san 各 86 个测试通过；本轮沙盒 san 临时关闭泄漏扫
 新增13个测试，GCC11.4 rel/san 各127个通过；本轮沙盒 san 关闭泄漏扫描，无 ASan/UBSan 告警，用户随后报告普通终端默认 san 的127项全部通过（5.78秒）。
 评测入口支持 `--index hnsw`，合成数据使用独立 Flat 参考；小规模基线的命令、环境、结果和未验证项见 [HNSW 评测](bench/hnsw.md)。
 已完成 SIFT 前10万条与 Flat 的同轮对照，结果和环境见上述评测文档；子集结果不替代百万库验收。
-该基础阶段当时尚未完成全量 SIFT1M；后续结果见下文。设计取舍见本地 ADR-0010，学习与面试要点见 [基础索引笔记](docs/learn/hnsw-baseline-index.md)。
+该基础阶段当时尚未完成全量 SIFT1M；后续结果见下文。设计取舍见本地 ADR-0010，学习与面试要点见 [基础索引笔记](docs/learn/p2-hnsw-index-and-benchmark.md#hnsw-baseline-index)。
 
 
 ### 多样性选邻与反向裁剪（2026-10-23）
@@ -339,7 +341,7 @@ GCC 11.4 rel/san 各 86 个测试通过；本轮沙盒 san 临时关闭泄漏扫
 不扩展候选、不回填被拒绝点，容量足够则保留全部；公开接口、图存储和局部查询工作区方案不变。
 新增10个测试，GCC11.4 rel/san各137项通过，本轮沙盒san关闭泄漏扫描，无ASan/UBSan告警；用户随后报告普通终端默认san的137项全部通过（4.33秒）。
 SIFT前10万条已完成最近M/剪枝的同轮对照，完整参数、环境、收益与代价见 [HNSW 评测](bench/hnsw.md)。
-该剪枝阶段当时尚未完成全量SIFT1M；后续结果见下文，Faiss对照仍待做。原理与面试表见本地 [多样性选邻笔记](docs/learn/hnsw-neighbor-selection.md)。
+该剪枝阶段当时尚未完成全量SIFT1M；后续结果见下文，Faiss对照仍待做。原理与面试表见本地 [多样性选邻笔记](docs/learn/p2-hnsw-index-and-benchmark.md#hnsw-neighbor-selection)。
 
 
 ### 完整 SIFT1M 与 efSearch 扫描（2026-10-23）
@@ -358,7 +360,7 @@ SIFT前10万条已完成最近M/剪枝的同轮对照，完整参数、环境、
 协议、版本、环境、收益与限制见 [Faiss对照](bench/faiss.md)，阶段验收见 [P2验证记录](docs/validation/p2.md)。
 五个参数点的吞吐均达到既定Python基线比例目标；这不是同准确率的纯C++内核比较。
 收尾rel/san各138项通过，本轮沙盒san关闭泄漏扫描，无ASan/UBSan告警；用户此前默认san138项通过记录保留。
-P2主要本机验收通过，待用户提交本轮工具/记录后合回main；查询工作区复用、真实并发与OOM注入仍未完成，不将其描述为已有能力。
+P2主要本机验收通过，已由用户提交收尾并合回main（045f26b）；查询工作区复用、真实并发与OOM注入仍未完成，不将其描述为已有能力。
 
 ## 数据集
 
@@ -369,3 +371,64 @@ SIFT1M（1M × 128d）。**不入库**（体积大），获取方式见 [data/RE
 - 命名空间 `ann`
 - 索引统一实现 `Index` 抽象接口（见总设计文档 §2.2）
 - **索引内部一律用下标（`uint32_t`）而非指针** —— 既利于 cache，也让持久化几乎免费
+
+
+## P3：KMeans 训练基础
+
+当前分支 `feat/p3-ivf-and-quantization`。新增 `ann/kmeans.h` 与 `src/kmeans.cpp`，沿用总设计的公开接口，供 IVF 粗聚类和 PQ 子空间训练复用。训练使用 L2、k-means++ 初始化和固定次数 Lloyd 迭代，空簇按距已有有效中心最远的样本重置，随后重新统计最终质心对应的簇大小。
+
+距离及均值累加使用 double，质心输出仍为 float；这是数值正确性基线，尚未接入 SIMD、并行或训练集采样。每轮分配复杂度 O(n×k×dim)，额外空间 O(n+k×dim)，不能据此宣称百万库训练性能已验收。重复点可能导致最终空簇；等距分配取较小簇 ID，不强制迁移样本以凑满每簇。固定种子保证同一实现及环境中的调用序列可复现，不保证跨标准库逐位一致。
+
+本块的验证范围与复现命令见 [P3阶段验证](docs/validation/p3.md)。未量化 IVF 核心见下节；nprobe 评测入口已接入，SIFT10k 起步基线已完成，后续推进 SQ/PQ。
+
+
+### 未量化 L2 IVF
+
+`feat/p3-ivf-flat` 已实现 `ann/ivf.h`：先 Add 收集数据，再 Build 训练粗中心并建立 CSR，构建后静态只读。用户确认首版仅支持 L2；内积及量化留待后续。查询按 nprobe 选择列表，列表成员保留原始插入 ID，局部最大堆维护 top-k；nprobe>=nlist 时扫描全库。候选不足时填哨兵，不自动扩大扫描。
+
+查询使用函数内工作区，因此会分配内存；nprobe 原子更新，每次查询读取一次。Build/Add 不与查询或统计并发。构造签名沿用设计，`quantizer.h` 已提供独立 SQ8 实现，IVF 现已接入维度匹配的内置 SQ8 残差路径，未知量化器仍拒绝。`ann_bench` 已支持 IVF 单值与 nprobe 列表扫描；小规模合成链路已跑通，命令、环境和适用范围见 [IVF评测](bench/ivf.md)，已完成 SIFT10k 起步对比，尚无全量数据或量化验收结论。验证范围见 [P3阶段验证](docs/validation/p3.md)。
+
+
+2026-10-24 已在干净提交1999ff4完成 SIFT 前10,000条/全部10,000查询的同轮Flat/IVF对照。IVF nlist32、训练5轮、seed42，nprobe1/4/16/32的严格Recall分别0.566530/0.925550/0.999910/1.000000；参考为截断库上的独立Flat，不能当作百万库验收。完整参数、环境、QPS及局限见 [IVF评测](bench/ivf.md)。该轮仅测未量化IVF，尚无IVF量化召回或压缩率结论。
+
+
+### 独立 SQ8 量化器（2026-10-24）
+
+当前功能分支 `feat/p3-sq8` 已实现 `ScalarQuantizer` 的范围训练、uint8编解码、调用方LUT及平方L2查表；公开签名沿用总设计。每维最近取整、半格向上、越界截断，常量维固定重建。私有保存min/max端点并用double计算映射，避免float步长下溢。查询仍为float，ADC比较查询与解码后的库向量，不等于对原始库向量的精确距离。
+
+新增15项测试，rel/san各187项CTest通过；本轮san临时关闭泄漏检查，无ASan/UBSan告警。该独立阶段之后已接入下述IVF残差路径，尚无新的量化召回/性能/压缩验收结论。编码载荷每维从4字节变1字节约4倍，不含模型、倒排元数据和查询LUT，不能当作P3的PQ至少8倍目标。范围和复现命令见 [P3阶段验证](docs/validation/p3.md)，学习与面试表保存在本机 `docs/learn/p3-sq8.md#sq8`。
+
+
+### IVF + 残差 SQ8 核心集成
+
+用户已确认编码残差：原向量训练粗中心，SQ8训练/编码x-c；查询每个非空探测簇用q-c建立局部LUT，查表后不重复加中心距离。构建成功释放原始float存储，仅保留代码、粗中心、CSR和模型；Size使用独立计数。当前仅支持维度匹配的内置ScalarQuantizer，公开签名不变，未知量化器拒绝。查询缓冲仍为函数局部，Search不修改成员。
+
+新增14项集成测试，rel/san各201项通过（本轮san关闭泄漏检查，无ASan/UBSan告警）。SQ8评测入口与下述起步对照现已完成；IVFFlat默认入口保持原行为，P3最终验收仍待PQ。取舍与学习记录在本机ADR-0015、docs/learn/p3-sq8.md#ivf-sq8；验证范围见 [P3阶段验证](docs/validation/p3.md)。
+
+
+### SQ8 评测入口与起步对照（2026-10-25）
+
+`ann_bench --index ivf --quantizer sq8`选择残差量化，默认none保持IVFFlat。CSV追加量化/编码/LUT元数据至31列，既有列名和顺序保留。rel/san各202项测试通过，本轮san关闭泄漏检查，无ASan/UBSan告警。
+
+在同轮SIFT10k库、前100条查询对照中，SQ8索引申请容量从5176732降至1337828字节（约3.87倍），但查询显著变慢，召回略降；这不是压缩带来加速的结果。完整环境、nprobe曲线、复现命令及适用范围见 [IVF与SQ8评测](bench/ivf.md)。没有全量SIFT1M、Faiss SQ8或P3最终量化验收结论。
+
+
+### 独立 PQ 量化器（2026-10-25）
+
+当前 `feat/p3-pq` 实现独立 `ProductQuantizer`，按总设计将dim等分为m段，各段用已有KMeans固定25轮训练，码本默认256中心，每段编码一个字节；不整除或ksub超出1–256时拒绝。支持编解码和调用方LUT的平方L2 ADC，查询不量化，模型不保存查询缓冲。距离double累加后检查float范围，LUT先检查再填表，两遍计算是当前正确性基线的成本。
+
+新增16项测试，rel/san各218项通过，本轮san关闭泄漏检查，无ASan/UBSan告警。该独立实现阶段未接入IVF或ann_bench；后续核心集成见下节，当前仍无PQ召回、训练速度、整体压缩率或P3最终验收结论。128维/m16的理论编码载荷32倍压缩不包含码本、列表和查询工作区。学习与面试表在本机 `docs/learn/p3-pq.md#pq`，阶段验证见 [P3验证](docs/validation/p3.md)。
+
+
+### IVF-PQ 核心集成（2026-10-25）
+
+用户确认给 `Quantizer` 基类新增只读 `Dim()`，内置SQ8/PQ统一校验原始宽度，代码分配和寻址改用独立 `CodeSize()`。PQ码长m不再被当成dim；现支持内置匹配维度的残差PQ，名称为IVFPQ。数据流沿用x-c训练/编码、逐列表q-c建表，成功构建释放原始float。
+
+新增接口使自定义Quantizer派生类需要补Dim实现；不是源码/ABI兼容承诺。新增13项集成测试，rel/san各231项通过，本轮san关闭泄漏检查，无ASan/UBSan告警。后续CLI与下述子集探索已完成，当前没有最终P3验收通过结论。学习面试表在本机 `docs/learn/p3-pq.md#ivf-pq`，阶段记录见 [P3验证](docs/validation/p3.md)。
+
+
+### PQ 评测入口与当前未达标项（2026-10-25）
+
+新增`--quantizer pq --pq-m 16 --pq-ksub 256`，粗训练轮数与PQ固定25轮分开说明，CSV原31列保留、追加PQ参数至33列。rel/san各232项通过，本轮san关闭泄漏检查，无ASan/UBSan告警。
+
+SIFT10k库、前100查询的探索中，PQ32/nlist256的索引容量较同配置IVFFlat约降低8.49倍，但全探测严格Recall仅0.856，低于0.90；其它本轮工作点也未同时满足两项要求。已安装Faiss的小规模准确率诊断同样显示类似配置有明显近似损失，不是正式速度对照，也不证明实现完全无缺陷。P3尚未验收通过，下一步先做误差/排名变化诊断，不更改严格Recall或验收目标。完整环境、参数、成功与失败点见 [PQ评测](bench/pq.md)。
